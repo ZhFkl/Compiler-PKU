@@ -1,0 +1,6 @@
+build/
+autotest_tmp/
+
+testcases/
+
+hello.koopa
