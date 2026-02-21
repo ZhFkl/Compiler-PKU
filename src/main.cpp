@@ -18,8 +18,8 @@ int main(int argc, const char *argv[]) {
     std::string mode;        
     std::string input_file;   
     std::string output_file;  
-
-    // 正确解析命令行参数：-koopa input -o output
+    cout << "test" << endl; 
+     // 正确解析命令行参数：-koopa input -o output
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-koopa" || arg == "-riscv") {  // 识别选项 -koopa
@@ -64,6 +64,8 @@ int main(int argc, const char *argv[]) {
   cout << endl;
   string koopa_ir = ast->GenKoopaIR();
   if(mode == "koopa"){
+      cout << "Koopa IR 代码" << endl;
+      cout << koopa_ir;
       ofstream out(output_file);
       assert(out.is_open());
       out << koopa_ir;
