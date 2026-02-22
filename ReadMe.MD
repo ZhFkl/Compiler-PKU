@@ -1,6 +1,6 @@
-这是我的编译器实践项目
+
 # 这是我的编译器实践项目
 
 ### 编译器效果展示
 
-<img src="./img/pic.png" alt="编译器测试截图" width="600" />
+<img src="./img/pic2.png" alt="编译器测试截图" width="600" />
