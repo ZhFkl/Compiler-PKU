@@ -32,6 +32,14 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 {MultiComment}  { /* 忽略，不做任何操作 */  }
 "int"           { return INT; }
 "return"        { return RETURN; }
+"<="            { return LE; }
+">="            { return GE; }
+"=="            { return EQ; }
+"!="            { return NEQ; }
+"&&"            { return LAND; }
+"||"            { return LOR; }
+
+
 
 {Identifier}    { yylval.str_val = new string(yytext); return IDENT; }
 

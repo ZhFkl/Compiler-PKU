@@ -1,4 +1,4 @@
-//
+
 #pragma once
 //这个文件主要是用来定义此时的endf的结构
 /*CompUnit  ::= FuncDef;
@@ -133,14 +133,14 @@ class NumberAST :public BaseAST {
 
 class ExpAST : public BaseAST {
     public:
-        unique_ptr<BaseAST> unary_exp;
+        unique_ptr<BaseAST> lor_exp;
         void Dump() const override {
             cout << "ExpAST: ";
-            unary_exp->Dump();
+            lor_exp->Dump();
         }
         string GenKoopaIR() const override {
             cout << "ExpAST GenKoopaIR" << endl;
-            return unary_exp->GenKoopaIR();
+            return lor_exp->GenKoopaIR();
         }
 };
 
@@ -200,6 +200,214 @@ class UnaryExpAST : public BaseAST {
                 return res_var;
             }
             return "";
+        }
+};
+
+class AddExpAST : public BaseAST {
+    public:
+    unique_ptr<BaseAST> mul_exp;
+    unique_ptr<BaseAST> add_exp;
+    char op = 0; // '+' or '-'
+    void Dump() const override {
+        cout << "AddExpAST: ";
+        if(add_exp){
+            add_exp->Dump();
+            cout << " " << op << " ";
+            mul_exp->Dump();
+        }else{
+            mul_exp->Dump();
+        }
+    }
+
+    string GenKoopaIR() const override {
+        if(add_exp){
+            string left_val = add_exp->GenKoopaIR();
+            string right_val = mul_exp->GenKoopaIR();
+            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            if(op == '+'){
+                koopa_insts_buffer += "  " + res_var + " = add " + left_val + ", " + right_val + "\n";
+            } else if(op == '-'){
+                koopa_insts_buffer += "  " + res_var + " = sub " + left_val + ", " + right_val + "\n";
+            }
+            return res_var;
+        } else {
+            return mul_exp->GenKoopaIR();
+        }
+    }
+};
+
+class MulExpAST : public BaseAST {
+    public:
+    unique_ptr<BaseAST> unary_exp;
+    unique_ptr<BaseAST> mul_exp;
+    char op = 0;
+    void Dump() const override {
+        cout << "MulExpAST: ";
+        if(mul_exp){
+            mul_exp->Dump();
+            cout << " " << op << " ";
+            unary_exp->Dump();
+        }else {
+            unary_exp->Dump();
+        }
+    }
+    
+    string GenKoopaIR() const override {
+        if(mul_exp){
+            string left_val = mul_exp->GenKoopaIR();
+            string right_val = unary_exp->GenKoopaIR();
+            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            if(op == '*'){
+                koopa_insts_buffer += "  " + res_var + " = mul " + left_val + ", " + right_val + "\n";
+            } else if(op == '/'){
+                koopa_insts_buffer += "  " + res_var + " = div " + left_val + ", " + right_val + "\n";
+            } else if(op == '%'){
+                koopa_insts_buffer += "  " + res_var + " = mod " + left_val + ", " + right_val + "\n";
+            }
+            return res_var;
+        }else {
+            return unary_exp->GenKoopaIR();
+        }
+    }
+};
+
+class RelExp : public BaseAST{
+    public:
+    unique_ptr<BaseAST> add_exp;
+    unique_ptr<BaseAST> rel_exp;
+    string op = ""; // '<', '>', '<=', '>='
+    void Dump() const override {
+        cout << "RelExpAST: ";
+        if(rel_exp){
+            rel_exp->Dump();
+            cout << " " << op << " ";
+            add_exp->Dump();
+        } else {
+            add_exp->Dump();
+        }
+    }
+
+    string GenKoopaIR() const override {
+        if(rel_exp){
+            string left_val = rel_exp->GenKoopaIR();
+            string right_val = add_exp->GenKoopaIR();
+            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            if(op == "<"){
+                koopa_insts_buffer += "  " + res_var + " = lt " + left_val + ", " + right_val + "\n";
+            } else if(op == ">"){
+                koopa_insts_buffer += "  " + res_var + " = gt " + left_val + ", " + right_val + "\n";
+            } else if(op == "<="){
+                koopa_insts_buffer += "  " + res_var + " = le " + left_val + ", " + right_val + "\n";
+            } else if(op == ">="){
+                koopa_insts_buffer += "  " + res_var + " = ge " + left_val + ", " + right_val + "\n";
+            }
+            return res_var;
+        } else {
+            return add_exp->GenKoopaIR();
+        }
+    }
+};
+
+class EqExp : public BaseAST{
+    public:
+        unique_ptr<BaseAST> rel_exp;
+        unique_ptr<BaseAST> eq_exp;
+        string op = ""; // '==' or '!='
+        void Dump() const override {
+            cout << "EqExpAST: ";
+            if(eq_exp){
+                eq_exp->Dump();
+                cout << " " << op << " ";
+                rel_exp->Dump();
+            } else {
+                rel_exp->Dump();
+            }
+        }
+
+        string GenKoopaIR() const override {
+            if(eq_exp){
+                string left_val = eq_exp->GenKoopaIR();
+                string right_val = rel_exp->GenKoopaIR();
+                string res_var = "%" + to_string(koopa_tmp_cnt++);
+                if(op == "=="){
+                    koopa_insts_buffer += "  " + res_var + " = eq " + left_val + ", " + right_val + "\n";
+                } else if(op == "!="){
+                    koopa_insts_buffer += "  " + res_var + " = ne " + left_val + ", " + right_val + "\n";
+                }
+                return res_var;
+            } else {
+                return rel_exp->GenKoopaIR();
+            }
+        }
+};
+
+class LAndExp : public BaseAST {
+    public:
+        unique_ptr<BaseAST> eq_exp;
+        unique_ptr<BaseAST> land_exp;
+        void Dump() const override {
+            cout << "LAndExpAST: ";
+            if(land_exp){
+                land_exp->Dump();
+                cout << " && ";
+                eq_exp->Dump();
+            } else {
+                eq_exp->Dump();
+            }
+        }
+
+        string GenKoopaIR() const override {
+            if(land_exp){
+                string left_val = land_exp->GenKoopaIR();
+                string right_val = eq_exp->GenKoopaIR();
+                string left_bool = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + left_bool + " = ne " + left_val + ", 0\n";
+        
+
+                string right_bool = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + right_bool + " = ne " + right_val + ", 0\n";
+                
+                string res_var = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + res_var + " = and " + left_bool + ", " + right_bool + "\n";
+                return res_var;
+            } else {
+                return eq_exp->GenKoopaIR();
+            }
+        }
+};
+
+class LOrExp : public BaseAST {
+    public:
+        unique_ptr<BaseAST> land_exp;
+        unique_ptr<BaseAST> lor_exp;
+        void Dump() const override {
+            cout << "LOrExpAST: ";
+            if(lor_exp){
+                lor_exp->Dump();
+                cout << " || ";
+                land_exp->Dump();
+            } else {
+                land_exp->Dump();
+            }
+        }
+
+        string GenKoopaIR() const override {
+            if(lor_exp){
+                string left_val = land_exp->GenKoopaIR();
+                string right_val = lor_exp->GenKoopaIR();
+                string left_bool = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + left_bool + " = ne " + left_val + ", 0\n";
+        
+
+                string right_bool = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + right_bool + " = ne " + right_val + ", 0\n";
+                
+                string res_var = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + res_var + " = or " + left_bool + ", " + right_bool + "\n";
+                return res_var;
+            } else {
+                return land_exp->GenKoopaIR();
+            }
         }
 };
 
