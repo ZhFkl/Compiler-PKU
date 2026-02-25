@@ -143,6 +143,48 @@ class BlockItemAST : public BaseAST {
     }
 };
 
+
+class LValAST : public BaseAST {
+    public:
+        string ident;
+        void Dump() const override {
+            cout << "LValAST: " << ident;
+        }
+
+        string GenKoopaIR() const override {
+            auto it = symbol_table.find(ident);
+            if (it == symbol_table.end()) {
+                cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
+                exit(1);
+            }
+
+            if (it->second.type == SymbolType::CONSTANT) {
+                // 常量直接返回数值字符串
+                return to_string(it->second.int_val);
+            } else {
+                // 变量！必须生成 load 指令从内存取值
+                string tmp_var = "%" + to_string(koopa_tmp_cnt++);
+                koopa_insts_buffer += "  " + tmp_var + " = load " + it->second.var_name + "\n";
+                return tmp_var; // 返回装载了值的新临时寄存器名
+            }
+        }
+
+        int CalcValue() const override {
+            auto it = symbol_table.find(ident);
+            if (it == symbol_table.end()) {
+                cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
+                exit(1);
+            }
+            // 语义分析：编译期常量求值时遇到了变量，报错！
+            if (it->second.type == SymbolType::VARIABLE) {
+                cerr << "Semantic Error: Variable '" << ident << "' cannot be used in constant expression" << endl;
+                exit(1);
+            }
+            return it->second.int_val;
+        }
+};
+
+
 class StmtAST : public BaseAST {
     public:
     bool is_return = false;
@@ -164,14 +206,15 @@ class StmtAST : public BaseAST {
             koopa_insts_buffer += "  ret " + ret_val + "\n";
             return "";
         } else {
-            string lval_name = lval->GenKoopaIR();
-            auto it = symbol_table.find(lval_name);
+            LValAST* lval_ptr = static_cast<LValAST*>(lval.get());
+            string target_ident = lval_ptr->ident;
+            auto it = symbol_table.find(target_ident);
             if (it == symbol_table.end()) {
-                cerr << "Semantic Error: Undefined variable '" << lval_name << "'" << endl;
+                cerr << "Semantic Error: Undefined variable '" << target_ident << "'" << endl;
                 exit(1);
             }
             if (it->second.type == SymbolType::CONSTANT) {
-                cerr << "Semantic Error: Cannot assign to constant '" << lval_name << "'" << endl;
+                cerr << "Semantic Error: Cannot assign to constant '" << target_ident << "'" << endl;
                 exit(1);
             }
 
@@ -256,47 +299,6 @@ class PrimaryExpAST : public BaseAST {
                 return LVal->CalcValue();
             }
             return 0;
-        }
-};
-
-
-class LValAST : public BaseAST {
-    public:
-        string ident;
-        void Dump() const override {
-            cout << "LValAST: " << ident;
-        }
-
-        string GenKoopaIR() const override {
-            auto it = symbol_table.find(ident);
-            if (it == symbol_table.end()) {
-                cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
-                exit(1);
-            }
-
-            if (it->second.type == SymbolType::CONSTANT) {
-                // 常量直接返回数值字符串
-                return to_string(it->second.int_val);
-            } else {
-                // 变量！必须生成 load 指令从内存取值
-                string tmp_var = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + tmp_var + " = load " + it->second.var_name + "\n";
-                return tmp_var; // 返回装载了值的新临时寄存器名
-            }
-        }
-
-        int CalcValue() const override {
-            auto it = symbol_table.find(ident);
-            if (it == symbol_table.end()) {
-                cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
-                exit(1);
-            }
-            // 语义分析：编译期常量求值时遇到了变量，报错！
-            if (it->second.type == SymbolType::VARIABLE) {
-                cerr << "Semantic Error: Variable '" << ident << "' cannot be used in constant expression" << endl;
-                exit(1);
-            }
-            return it->second.int_val;
         }
 };
 

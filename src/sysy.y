@@ -367,6 +367,7 @@ VarDefList : VarDef {
 VarDef: IDENT{
   auto ast = new VarDefAST();
   ast->ident = *$1;
+  $$ = ast;
 } | IDENT '=' InitVal{
   auto ast = new VarDefAST();
   ast->ident = *$1;

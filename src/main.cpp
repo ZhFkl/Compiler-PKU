@@ -59,9 +59,12 @@ int main(int argc, const char *argv[]) {
   assert(!ret);
   fclose(yyin);
 
-  cout << "AST 结构" << endl;
-  ast->Dump();
-  cout << endl;
+  if (ast) { // 加上这层保护！
+      cout << "AST 结构" << endl;
+  } else {
+      cerr << "Compiler Error: Parsing failed, AST is null!" << endl;
+      return 1; // 发生语法错误，返回非0状态码
+  }
   string koopa_ir = ast->GenKoopaIR();
   if(mode == "koopa"){
       cout << "Koopa IR 代码" << endl;

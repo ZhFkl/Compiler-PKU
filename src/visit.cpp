@@ -99,6 +99,7 @@ void Visit(const koopa_raw_basic_block_t &bb){
 
 void Visit(const koopa_raw_value_t &val){
     const auto& kind = val->kind;
+    //cout << kind.tag << endl;
     //根据指令value来进行操作
     //这里只是简单打印一下指令的tag，实际使用中可以根据tag来区分不同类型的指令进行处理
     switch(kind.tag){
@@ -110,6 +111,17 @@ void Visit(const koopa_raw_value_t &val){
             break;
         case  KOOPA_RVT_BINARY:
             Visit(val, kind.data.binary);
+            break;
+        case KOOPA_RVT_LOAD:
+            Visit(val, kind.data.load);
+            break;
+        case KOOPA_RVT_STORE:
+            Visit(val, kind.data.store);
+            break;
+
+        case KOOPA_RVT_ALLOC:
+            break;
+        case KOOPA_RVT_GLOBAL_ALLOC:
             break;
         default:
             assert(false);
@@ -186,5 +198,19 @@ void Visit(const koopa_raw_value_t &val, const koopa_raw_binary_t &binary){
     }
     //把t0中的结果保存到对应的栈中
     int offset = stack_map[val];
+    cout << "\tsw t0, " << offset << "(sp)" << endl;
+}
+
+
+void Visit(const koopa_raw_value_t &val, const koopa_raw_load_t &load){
+    int offset = stack_map[load.src];
+    cout << "\tlw t0, " << offset << "(sp)" << endl;
+    int val_offset = stack_map[val];
+    cout << "\tsw t0, " << val_offset << "(sp)" << endl;
+}
+
+void Visit(const koopa_raw_value_t &val, const koopa_raw_store_t &store){
+    load_value(store.value, "t0");
+    int offset = stack_map[store.dest];
     cout << "\tsw t0, " << offset << "(sp)" << endl;
 }
