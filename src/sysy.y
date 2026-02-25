@@ -27,12 +27,19 @@ using namespace std;
   BaseAST* ast_val;
 }
 
-%token INT RETURN LE GE EQ NEQ LAND LOR
-%token <str_val> IDENT
+%token INT RETURN LE GE EQ NEQ LAND LOR CONST
+%token <str_val> IDENT 
 %token <int_val> INT_CONST
 
 
-%type <ast_val> FuncDef FuncType Block Stmt RelExp EqExp LAndExp LOrExp Exp PrimaryExp UnaryExp Number AddExp MulExp 
+%type <ast_val> FuncDef FuncType Block Stmt 
+RelExp EqExp LAndExp LOrExp Exp PrimaryExp 
+UnaryExp Number AddExp MulExp Decl ConstDecl
+BType ConstDef ConstInitVal BlockItem BlockItemList
+LVal ConstExp ConstDefList VarDecl VarDef VarDefList
+InitVal 
+
+
 %type <int_val> UnaryOp AddOp MulOp 
 %type <str_val> RelOp EqOp
 
@@ -64,21 +71,46 @@ FuncType
   }
   ;
 
-Block
-  : '{' Stmt '}' {
+Block: '{' BlockItemList '}' {
+  $$ = $2;
+}
+| '{' '}'{
+  $$ = new BlockAST();
+};
+
+BlockItemList: BlockItem {
     auto ast = new BlockAST();
-    ast->stmt = unique_ptr<BaseAST>($2);
+    ast->block_items.push_back(unique_ptr<BaseAST>($1));
     $$ = ast;
   }
-  ;
+  | BlockItemList BlockItem {
+    auto ast = static_cast<BlockAST*>($1);
+    ast->block_items.push_back(unique_ptr<BaseAST>($2));
+    $$ = ast;
+  };
 
-Stmt
-  : RETURN Exp ';' {
+BlockItem: Decl{
+  auto ast = new BlockItemAST();
+  ast->decl = unique_ptr<BaseAST>($1);
+  $$ = ast;
+}
+| Stmt {
+  auto ast = new BlockItemAST();
+  ast->stmt = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
+Stmt: RETURN Exp ';' {
     auto ast = new StmtAST();
+    ast->is_return = true;
     ast->exp = unique_ptr<BaseAST>($2);
     $$ = ast;
-  }
-  ;
+}| LVal '=' Exp ';'{
+    auto ast = new StmtAST();
+    ast->exp = unique_ptr<BaseAST>($3);
+    ast->lval = unique_ptr<BaseAST>($1);
+    $$ = ast;
+};
 
 Exp
   : LOrExp {
@@ -98,8 +130,12 @@ PrimaryExp
     auto ast = new PrimaryExpAST();
     ast->number = unique_ptr<BaseAST>($1);
     $$ = ast;
+  }| LVal {
+    auto ast = new PrimaryExpAST();
+    ast->LVal = unique_ptr<BaseAST>($1);
+    $$ = ast;
   }
-  ;
+
 
 UnaryExp
   : PrimaryExp {
@@ -142,6 +178,12 @@ Number
     $$ = ast;
   }
   ;
+
+LVal : IDENT {
+  auto ast = new LValAST();
+  ast->ident = *$1;
+  $$ = ast;
+}
 
 AddExp
   : MulExp {
@@ -244,8 +286,100 @@ LOrExp
   }
   ;
 
+Decl
+  : ConstDecl{
+    auto ast = new DeclAST();
+    ast->const_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | VarDecl{
+    auto ast = new DeclAST();
+    ast->var_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
 
-  
+ConstDecl
+  : CONST BType ConstDefList ';'{
+    auto ast = static_cast<ConstDeclAST*>($3);
+    ast->b_type = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  ;
+
+ConstDefList
+  : ConstDef {
+    auto ast = new ConstDeclAST();
+    ast->const_defs.push_back(unique_ptr<BaseAST>($1));
+    $$ = ast;
+  }
+  | ConstDefList ',' ConstDef {
+    auto ast = static_cast<ConstDeclAST*>($1);
+    ast->const_defs.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
+  }
+  ;
+
+BType
+  : INT{
+    auto ast = new BTypeAST();
+    $$ = ast;
+  }
+  ;
+
+ConstDef : IDENT '=' ConstInitVal{
+  auto ast = new ConstDefAST();
+  ast->ident = *$1;
+  ast->const_init_val = unique_ptr<BaseAST>($3);
+  $$ = ast;
+}
+
+
+ConstInitVal: ConstExp{
+  auto ast = new ConstInitValAST();
+  ast->const_exp = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
+ConstExp : Exp{
+  auto ast = new ConstExpAST();
+  ast->exp = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
+VarDecl: BType VarDefList ';'{
+    auto ast = static_cast<VarDeclAST*>($2);
+    ast->b_type = unique_ptr<BaseAST>($1);
+    $$ = ast;
+};
+
+VarDefList : VarDef {
+    auto ast = new VarDeclAST();
+    ast->var_defs.push_back(unique_ptr<BaseAST>($1));
+    $$ = ast;
+  }
+  | VarDefList ',' VarDef {
+    auto ast = static_cast<VarDeclAST*>($1);
+    ast->var_defs.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
+  };
+
+VarDef: IDENT{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+} | IDENT '=' InitVal{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+  ast->init_val = unique_ptr<BaseAST>($3);
+  $$ = ast;
+};
+
+InitVal: Exp{
+  auto ast = new InitValAST();
+  ast->exp = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
 %%
 
 void yyerror(unique_ptr<BaseAST> &ast, const char *s) {
