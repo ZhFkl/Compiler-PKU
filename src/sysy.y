@@ -37,7 +37,7 @@ RelExp EqExp LAndExp LOrExp Exp PrimaryExp
 UnaryExp Number AddExp MulExp Decl ConstDecl
 BType ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
-InitVal 
+InitVal
 
 
 %type <int_val> UnaryOp AddOp MulOp 
@@ -100,17 +100,46 @@ BlockItem: Decl{
   $$ = ast;
 };
 
-Stmt: RETURN Exp ';' {
-    auto ast = new StmtAST();
-    ast->is_return = true;
-    ast->exp = unique_ptr<BaseAST>($2);
-    $$ = ast;
-}| LVal '=' Exp ';'{
-    auto ast = new StmtAST();
-    ast->exp = unique_ptr<BaseAST>($3);
-    ast->lval = unique_ptr<BaseAST>($1);
-    $$ = ast;
-};
+
+Stmt
+  : LVal '=' Exp ';' {
+      // 匹配: LVal = Exp;
+      auto ast = new StmtAST();
+      ast->lval = unique_ptr<BaseAST>($1);
+      ast->exp = unique_ptr<BaseAST>($3);
+      $$ = ast;
+  }
+  | Exp ';' {
+      // 匹配: Exp;
+      auto ast = new StmtAST();
+      ast->exp = unique_ptr<BaseAST>($1);
+      $$ = ast;
+  }
+  | ';' {
+      // 匹配: ; (空语句)
+      $$ = new StmtAST(); // 内部所有指针全为空，is_return 也是 false
+  }
+  | Block {
+      // 匹配: Block
+      auto ast = new StmtAST();
+      ast->block = unique_ptr<BaseAST>($1);
+      $$ = ast;
+  }
+  | RETURN Exp ';' {
+      // 匹配: return Exp;
+      auto ast = new StmtAST();
+      ast->is_return = true;
+      ast->exp = unique_ptr<BaseAST>($2);
+      $$ = ast;
+  }
+  | RETURN ';' {
+      // 匹配: return;
+      auto ast = new StmtAST();
+      ast->is_return = true;
+      $$ = ast;
+  }
+  ;
+
 
 Exp
   : LOrExp {
@@ -380,6 +409,10 @@ InitVal: Exp{
   ast->exp = unique_ptr<BaseAST>($1);
   $$ = ast;
 };
+
+
+//pa5
+
 
 %%
 
