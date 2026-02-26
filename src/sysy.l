@@ -40,6 +40,8 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 "!="            { return NEQ; }
 "&&"            { return LAND; }
 "||"            { return LOR; }
+"if"            { return IF; }
+"else"          { return ELSE;}
 
 
 

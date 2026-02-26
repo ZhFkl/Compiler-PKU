@@ -18,7 +18,14 @@ void load_value(koopa_raw_value_t val,const string&reg){
         cout << "\tlw " << reg << ", " << offset << "(sp)" << endl;
     }
 }
-
+string GetBasicBlockLabel(koopa_raw_basic_block_t bb) {
+    if (!bb || !bb->name) return "";
+    std::string name = bb->name;
+    if (!name.empty() && name[0] == '%') {
+        return name.substr(1);  // 去掉 '%'
+    }
+    return name;
+}
 
 
 void Visit(const koopa_raw_program_t &program){
@@ -69,6 +76,7 @@ void Visit(const koopa_raw_function_t & func){
         }
     }
     //计算对其的栈指针
+    //cout << current_stack_frame_size << endl;
     current_stack_frame_size = ((current_stack_offset + 15) / 16) * 16;
     if(current_stack_frame_size > 0){
         //分配栈空间
@@ -88,6 +96,8 @@ void Visit(const koopa_raw_function_t & func){
 
 
 void Visit(const koopa_raw_basic_block_t &bb){
+    string label = GetBasicBlockLabel(bb);
+    cout << label << ":" << endl;
     for(size_t i = 0; i < bb->insts.len ;i++){
         assert(bb->insts.kind == KOOPA_RSIK_VALUE);
         koopa_raw_value_t insts = (koopa_raw_value_t) bb->insts.buffer[i];
@@ -98,8 +108,7 @@ void Visit(const koopa_raw_basic_block_t &bb){
 
 
 void Visit(const koopa_raw_value_t &val){
-    const auto& kind = val->kind;
-    //cout << kind.tag << endl;
+    const auto& kind = val->kind;;
     //根据指令value来进行操作
     //这里只是简单打印一下指令的tag，实际使用中可以根据tag来区分不同类型的指令进行处理
     switch(kind.tag){
@@ -122,6 +131,12 @@ void Visit(const koopa_raw_value_t &val){
         case KOOPA_RVT_ALLOC:
             break;
         case KOOPA_RVT_GLOBAL_ALLOC:
+            break;
+        case KOOPA_RVT_BRANCH:
+            Visit(val,kind.data.branch);
+            break;
+        case KOOPA_RVT_JUMP:
+            Visit(val,kind.data.jump);
             break;
         default:
             assert(false);
@@ -214,3 +229,17 @@ void Visit(const koopa_raw_value_t &val, const koopa_raw_store_t &store){
     int offset = stack_map[store.dest];
     cout << "\tsw t0, " << offset << "(sp)" << endl;
 }
+
+ void Visit(const koopa_raw_value_t &val, const koopa_raw_branch_t& branch){
+    load_value(branch.cond, "t0");
+    string true_label = GetBasicBlockLabel(branch.true_bb);
+    string false_label = GetBasicBlockLabel(branch.false_bb);
+    cout << "\tbnez t0, " << true_label << endl;
+    cout << "\tj " << false_label << endl;
+ }
+
+ void Visit(const koopa_raw_value_t &val, const koopa_raw_jump_t& jump){
+    //cout << "test"<< endl;
+    string target_label = GetBasicBlockLabel(jump.target);
+    cout << "\tj " << target_label << std::endl;
+ }

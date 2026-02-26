@@ -27,7 +27,7 @@ using namespace std;
   BaseAST* ast_val;
 }
 
-%token INT RETURN LE GE EQ NEQ LAND LOR CONST
+%token INT RETURN LE GE EQ NEQ LAND LOR CONST IF ELSE
 %token <str_val> IDENT 
 %token <int_val> INT_CONST
 
@@ -138,7 +138,21 @@ Stmt
       ast->is_return = true;
       $$ = ast;
   }
-  ;
+  | IF '(' Exp ')' Stmt{
+      auto ast = new StmtAST();
+      ast->is_if = true;
+      ast->cond = unique_ptr<BaseAST>($3);
+      ast->then_stmt = unique_ptr<BaseAST>($5);
+      $$ = ast;
+  }
+  | IF '(' Exp ')' Stmt ELSE Stmt{
+      auto ast = new StmtAST();
+      ast->is_if = true;
+      ast->cond = unique_ptr<BaseAST>($3);
+      ast->then_stmt = unique_ptr<BaseAST>($5);
+      ast->else_stmt = unique_ptr<BaseAST>($7);
+      $$ = ast;
+  };
 
 
 Exp

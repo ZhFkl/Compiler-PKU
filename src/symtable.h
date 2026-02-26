@@ -57,3 +57,90 @@ class SymbolTable {
         return nullptr; // 未找到
     }
 };
+
+
+class KoopaIRBuilder{
+private:
+    int tmp_cnt = 0;
+    string alloc_buffer = "";
+    string inst_buffer = "";
+    bool is_block_closed = false;
+public:
+    void Reset(){
+        tmp_cnt = 0;
+        alloc_buffer = "";
+        inst_buffer = "";
+        is_block_closed = false;
+    }
+
+    int GetUniqueId(){
+        return tmp_cnt++;
+    }
+
+    string GetTmpVar(){
+        return "%" + to_string(GetUniqueId());
+    }
+
+    void AddAlloc(const string& inst){
+        alloc_buffer += "  " + inst + "\n";
+    }
+
+    void AddInst(const string& inst){
+        if(is_block_closed){
+            cerr << "Error: Cannot add instruction to a closed block!" << endl;
+            return;
+        }
+        inst_buffer += "  " + inst + "\n";
+    }
+
+    //终结指令
+    void EndWithJump(const string& target){
+        if(is_block_closed){
+            cerr << "Error: Block is already closed!" << endl;
+            return;
+        }
+        inst_buffer += "  jump " + target + "\n";
+        is_block_closed = true;
+    }
+
+    void EndWithBranch(const string& cond, const string& true_label, const string& false_label){
+        if(is_block_closed){
+            cerr << "Error: Block is already closed!" << endl;
+            return;
+        }
+        inst_buffer += "  br " + cond + ", " + true_label + ", " + false_label + "\n";
+        is_block_closed = true;
+    }
+
+    //终结指令return
+    void EndWithRet(const string& lable){
+        inst_buffer += "  ret " + lable + "\n";
+        is_block_closed = true;
+    }
+
+    void StartNewBlock(const string& label){
+        if(!is_block_closed){
+            cerr << "Error: Previous block is not closed yet!" << endl;
+            return;
+        }
+        inst_buffer += label + ":\n";
+        is_block_closed = false;
+    }
+
+    string BuildFunction(const string& func_name){
+        if(!is_block_closed){
+            cerr << "Error: Cannot build function with an open block!" << endl;
+            return "";
+        }
+        string final_ir = "fun @" + func_name + "(): i32 {\n";
+        final_ir += "%entry:\n";
+        final_ir += alloc_buffer; // alloc 统一置顶
+        final_ir += inst_buffer;
+        final_ir += "}\n";
+        return final_ir;
+    }
+
+    bool IsBlockClosed() const {
+        return is_block_closed;
+    }
+};

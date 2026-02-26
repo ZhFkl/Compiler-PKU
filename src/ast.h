@@ -10,9 +10,8 @@
 using namespace std;
 
 
-inline int koopa_tmp_cnt = 0;
-inline string koopa_insts_buffer = "";
 inline SymbolTable sym_table;
+inline KoopaIRBuilder builder;
 
 
 class BaseAST {
@@ -46,15 +45,11 @@ class FuncDefAST :public BaseAST {
 
 
     string GenKoopaIR() const override {
-        ostringstream ss;
-        ss << "fun @" << ident << "(): i32 {" << endl;
-        ss << "%entry:" << endl;
+        builder.Reset();
         block->GenKoopaIR();
-        ss << koopa_insts_buffer <<endl;
-        ss << "}" << endl;
-        cout << ss.str();
-        return ss.str();
-        //
+        string result = builder.BuildFunction(ident);
+        cout << result << endl;
+        return result;
     }
 };
 
@@ -75,6 +70,9 @@ class BlockAST : public BaseAST {
         sym_table.EnterScope();
         for(const auto &item: block_items){
             item->GenKoopaIR();
+            if(builder.IsBlockClosed()){
+                break; 
+            }
         }
         sym_table.ExitScope();
         return "";
@@ -87,7 +85,6 @@ class BlockItemAST : public BaseAST {
     unique_ptr<BaseAST> stmt;
 
     string GenKoopaIR() const override {
-        cout << "BlockItemAST GenKoopaIR" << endl;
         if(decl){
             return decl->GenKoopaIR();
         } else if(stmt){
@@ -114,8 +111,8 @@ class LValAST : public BaseAST {
                 return to_string(entry->int_val);
             } else {
                 // 变量必须生成 load 指令从内存取值
-                string tmp_var = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + tmp_var + " = load " + entry->var_name + "\n";
+                string tmp_var = builder.GetTmpVar();
+                builder.AddInst(tmp_var + " = load " + entry->var_name);
                 return tmp_var; 
             }
         }
@@ -138,19 +135,43 @@ class LValAST : public BaseAST {
 class StmtAST : public BaseAST {
     public:
     bool is_return = false;
+    bool is_if = false;
     unique_ptr<BaseAST> exp;
     unique_ptr<BaseAST> lval;
     unique_ptr<BaseAST> block;
+    unique_ptr<BaseAST> else_stmt;
+    unique_ptr<BaseAST> cond;
+    unique_ptr<BaseAST> then_stmt;
+    
 
     string GenKoopaIR() const override {
         if(is_return){
-            if(exp){
-                string ret_val = exp->GenKoopaIR();
-                koopa_insts_buffer += "  ret " + ret_val + "\n";
-            }else{
-                koopa_insts_buffer += "  ret 0\n";
-            }
+            string ret_val = exp ? exp->GenKoopaIR() : "0"; 
+            builder.EndWithRet(ret_val);
             return "";
+        }else if(is_if){
+            string cond_val = cond->GenKoopaIR();
+            int id = builder.GetUniqueId();
+            string then_label = "%then_" + to_string(id);
+            string else_label = "%else_" + to_string(id);
+            string end_label = "%end_" + to_string(id);
+
+            builder.EndWithBranch(cond_val, then_label, else_label);
+
+            builder.StartNewBlock(then_label);
+            then_stmt->GenKoopaIR();
+            builder.EndWithJump(end_label);
+
+            builder.StartNewBlock(else_label);
+            if(else_stmt){
+                else_stmt->GenKoopaIR();
+            }
+            builder.EndWithJump(end_label);
+
+            builder.StartNewBlock(end_label);
+            return "";
+
+
         } else if(lval && exp){
             LValAST* lval_ptr = static_cast<LValAST*>(lval.get());
             string target_ident = lval_ptr->ident;
@@ -165,7 +186,7 @@ class StmtAST : public BaseAST {
                 exit(1);
             }
             string val_name = exp->GenKoopaIR();
-            koopa_insts_buffer += "  store " + val_name + ", " + entry->var_name + "\n";
+            builder.AddInst("store " + val_name + ", " + entry->var_name);
 
         }else if(block){
             block->GenKoopaIR();
@@ -182,7 +203,6 @@ class NumberAST :public BaseAST {
     public:
     int value;
     string GenKoopaIR() const override {
-        cout << "NumberAST GenKoopaIR" << endl;
         return to_string(value);
     }
 
@@ -196,7 +216,6 @@ class ExpAST : public BaseAST {
         unique_ptr<BaseAST> lor_exp;
 
         string GenKoopaIR() const override {
-            cout << "ExpAST GenKoopaIR" << endl;
             return lor_exp->GenKoopaIR();
         }
 
@@ -212,7 +231,6 @@ class PrimaryExpAST : public BaseAST {
         unique_ptr<BaseAST> LVal;
 
         string GenKoopaIR() const override {
-            cout << "PrimaryExpAST GenKoopaIR" << endl;
             if(exp){
                 return exp->GenKoopaIR();
             } else if(number){
@@ -243,7 +261,6 @@ class UnaryExpAST : public BaseAST {
         unique_ptr<BaseAST> unary_exp;
 
         string GenKoopaIR() const override {
-            cout << "UnaryExpAST GenKoopaIR" << endl;
             if(primary_exp){
                 return primary_exp->GenKoopaIR();
             } else if(op && unary_exp){
@@ -251,11 +268,11 @@ class UnaryExpAST : public BaseAST {
                 if(op == '+'){
                     return inner_val;
                 }
-                string res_var = "%" + to_string(koopa_tmp_cnt++);
+                string res_var = builder.GetTmpVar();
                 if(op == '-'){
-                    koopa_insts_buffer += "  " + res_var + " = sub 0, " + inner_val + "\n";
+                    builder.AddInst(res_var + " = sub 0, " + inner_val);
                 }else if(op == '!'){
-                    koopa_insts_buffer += "  " + res_var + " = eq " + inner_val + ", 0\n";
+                    builder.AddInst(res_var + " = eq " + inner_val + ", 0");
                 }
                 return res_var;
             }
@@ -282,11 +299,11 @@ class AddExpAST : public BaseAST {
         if(add_exp){
             string left_val = add_exp->GenKoopaIR();
             string right_val = mul_exp->GenKoopaIR();
-            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            string res_var = builder.GetTmpVar();
             if(op == '+'){
-                koopa_insts_buffer += "  " + res_var + " = add " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = add " + left_val + ", " + right_val);
             } else if(op == '-'){
-                koopa_insts_buffer += "  " + res_var + " = sub " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = sub " + left_val + ", " + right_val);
             }
             return res_var;
         } else {
@@ -314,13 +331,13 @@ class MulExpAST : public BaseAST {
         if(mul_exp){
             string left_val = mul_exp->GenKoopaIR();
             string right_val = unary_exp->GenKoopaIR();
-            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            string res_var = builder.GetTmpVar();
             if(op == '*'){
-                koopa_insts_buffer += "  " + res_var + " = mul " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = mul " + left_val + ", " + right_val);
             } else if(op == '/'){
-                koopa_insts_buffer += "  " + res_var + " = div " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = div " + left_val + ", " + right_val);
             } else if(op == '%'){
-                koopa_insts_buffer += "  " + res_var + " = mod " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = mod " + left_val + ", " + right_val);
             }
             return res_var;
         }else {
@@ -349,15 +366,15 @@ class RelExp : public BaseAST{
         if(rel_exp){
             string left_val = rel_exp->GenKoopaIR();
             string right_val = add_exp->GenKoopaIR();
-            string res_var = "%" + to_string(koopa_tmp_cnt++);
+            string res_var = builder.GetTmpVar();
             if(op == "<"){
-                koopa_insts_buffer += "  " + res_var + " = lt " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = lt " + left_val + ", " + right_val);
             } else if(op == ">"){
-                koopa_insts_buffer += "  " + res_var + " = gt " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = gt " + left_val + ", " + right_val);
             } else if(op == "<="){
-                koopa_insts_buffer += "  " + res_var + " = le " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = le " + left_val + ", " + right_val);
             } else if(op == ">="){
-                koopa_insts_buffer += "  " + res_var + " = ge " + left_val + ", " + right_val + "\n";
+                builder.AddInst(res_var + " = ge " + left_val + ", " + right_val);
             }
             return res_var;
         } else {
@@ -387,11 +404,11 @@ class EqExp : public BaseAST{
             if(eq_exp){
                 string left_val = eq_exp->GenKoopaIR();
                 string right_val = rel_exp->GenKoopaIR();
-                string res_var = "%" + to_string(koopa_tmp_cnt++);
+                string res_var = builder.GetTmpVar();
                 if(op == "=="){
-                    koopa_insts_buffer += "  " + res_var + " = eq " + left_val + ", " + right_val + "\n";
+                    builder.AddInst(res_var + " = eq " + left_val + ", " + right_val);
                 } else if(op == "!="){
-                    koopa_insts_buffer += "  " + res_var + " = ne " + left_val + ", " + right_val + "\n";
+                    builder.AddInst(res_var + " = ne " + left_val + ", " + right_val);
                 }
                 return res_var;
             } else {
@@ -414,18 +431,41 @@ class LAndExp : public BaseAST {
 
         string GenKoopaIR() const override {
             if(land_exp){
-                string left_val = land_exp->GenKoopaIR();
-                string right_val = eq_exp->GenKoopaIR();
-                string left_bool = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + left_bool + " = ne " + left_val + ", 0\n";
-        
+                                // 为这个 && 表达式分配一个临时变量（指针），用于存储最终结果
+                string tmp_ptr = "@and_tmp_" + to_string(builder.GetUniqueId());
+                builder.AddAlloc(tmp_ptr + " = alloc i32");
 
-                string right_bool = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + right_bool + " = ne " + right_val + ", 0\n";
-                
-                string res_var = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + res_var + " = and " + left_bool + ", " + right_bool + "\n";
-                return res_var;
+                // 生成左操作数，并转为布尔
+                string left_val = land_exp->GenKoopaIR();
+                string left_bool = builder.GetTmpVar();
+                builder.AddInst(left_bool + " = ne " + left_val + ", 0");
+
+                int id = builder.GetUniqueId();
+                string right_label = "%and_right_" + to_string(id);
+                string false_label = "%and_false_" + to_string(id);
+                string end_label = "%and_end_" + to_string(id);
+
+                // 根据 left_bool 分支
+                builder.EndWithBranch(left_bool, right_label, false_label);
+
+                // 右分支（left 为真）
+                builder.StartNewBlock(right_label);
+                string right_val = eq_exp->GenKoopaIR();
+                string right_bool = builder.GetTmpVar();
+                builder.AddInst(right_bool + " = ne " + right_val + ", 0");
+                builder.AddInst("store " + right_bool + ", " + tmp_ptr);  // 存储右分支结果
+                builder.EndWithJump(end_label);
+
+                // 假分支（left 为假）
+                builder.StartNewBlock(false_label);
+                builder.AddInst("store 0, " + tmp_ptr);  // 结果直接为 0
+                builder.EndWithJump(end_label);
+
+                // 结束块：从临时变量加载最终结果
+                builder.StartNewBlock(end_label);
+                string result = builder.GetTmpVar();
+                builder.AddInst(result + " = load " + tmp_ptr);
+                return result;
             } else {
                 return eq_exp->GenKoopaIR();
             }
@@ -447,18 +487,39 @@ class LOrExp : public BaseAST {
 
         string GenKoopaIR() const override {
             if(lor_exp){
-                string left_val = land_exp->GenKoopaIR();
-                string right_val = lor_exp->GenKoopaIR();
-                string left_bool = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + left_bool + " = ne " + left_val + ", 0\n";
-        
+               string tmp_ptr = "@or_tmp_" + to_string(builder.GetUniqueId());
+                builder.AddAlloc(tmp_ptr + " = alloc i32");
 
-                string right_bool = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + right_bool + " = ne " + right_val + ", 0\n";
-                
-                string res_var = "%" + to_string(koopa_tmp_cnt++);
-                koopa_insts_buffer += "  " + res_var + " = or " + left_bool + ", " + right_bool + "\n";
-                return res_var;
+                // 左操作数
+                string left_val = lor_exp->GenKoopaIR();
+                string left_bool = builder.GetTmpVar();
+                builder.AddInst(left_bool + " = ne " + left_val + ", 0");
+
+                int id = builder.GetUniqueId();
+                string true_label = "%or_true_" + to_string(id);
+                string right_label = "%or_right_" + to_string(id);
+                string end_label = "%or_end_" + to_string(id);
+
+                builder.EndWithBranch(left_bool, true_label, right_label);
+
+                // 真分支（left 为真）
+                builder.StartNewBlock(true_label);
+                builder.AddInst("store 1, " + tmp_ptr);  // 结果为 1
+                builder.EndWithJump(end_label);
+
+                // 右分支（left 为假）
+                builder.StartNewBlock(right_label);
+                string right_val = land_exp->GenKoopaIR();
+                string right_bool = builder.GetTmpVar();
+                builder.AddInst(right_bool + " = ne " + right_val + ", 0");
+                builder.AddInst("store " + right_bool + ", " + tmp_ptr);
+                builder.EndWithJump(end_label);
+
+                // 结束块
+                builder.StartNewBlock(end_label);
+                string result = builder.GetTmpVar();
+                builder.AddInst(result + " = load " + tmp_ptr);
+                return result;
             } else {
                 return land_exp->GenKoopaIR();
             }
@@ -571,16 +632,16 @@ class VarDefAST : public BaseAST {
         string GenKoopaIR() const override {
 
             //为变量生成一个koopa IR中的临时变量名
-            string var_name = "%" + ident + "_" + to_string(koopa_tmp_cnt++);
+            string var_name = "@" + ident + "_" + to_string(builder.GetUniqueId());
             SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name};
             if (!sym_table.Insert(ident, entry)) {
                 cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
                 exit(1);
             }
-            koopa_insts_buffer += "  " + var_name + " = alloc i32\n";
+            builder.AddAlloc(var_name + " = alloc i32");
             if(init_val){
                 string init_val_name = init_val->GenKoopaIR();
-                koopa_insts_buffer += "  store " + init_val_name + ", " + var_name + "\n";
+                builder.AddInst("store " + init_val_name + ", " + var_name);
             }
             return "";
         }
