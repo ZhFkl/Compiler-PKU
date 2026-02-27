@@ -65,7 +65,42 @@ private:
     string alloc_buffer = "";
     string inst_buffer = "";
     bool is_block_closed = false;
+    struct loopInfo{
+        string entry_label;
+        string end_label;
+    };
+    vector<loopInfo> loop_stack;
 public:
+    void Pushloop(const string& entry, const string& end){
+        loop_stack.push_back({entry, end});
+    }
+
+    void Poploop(){
+        if(!loop_stack.empty()){
+            loop_stack.pop_back();
+        }else {
+            cerr << "Error: Loop stack is already empty!" << endl;
+        }
+    }
+
+    string GetCurrentLoopEntry() const {
+        if(!loop_stack.empty()){
+            return loop_stack.back().entry_label;
+        }else {
+            cerr << "Error: Loop stack is empty!" << endl;
+            return "";
+        }
+    }
+    
+    string GetCurrentLoopEnd() const {
+        if(!loop_stack.empty()){
+            return loop_stack.back().end_label;
+        }else {
+            cerr << "Error: Loop stack is empty!" << endl;
+            return "";
+        }
+    }
+
     void Reset(){
         tmp_cnt = 0;
         alloc_buffer = "";

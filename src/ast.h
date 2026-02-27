@@ -142,6 +142,9 @@ class StmtAST : public BaseAST {
     unique_ptr<BaseAST> else_stmt;
     unique_ptr<BaseAST> cond;
     unique_ptr<BaseAST> then_stmt;
+    unique_ptr<BaseAST> while_exp;
+    bool is_break = false;
+    bool is_continue = false;
     
 
     string GenKoopaIR() const override {
@@ -192,8 +195,14 @@ class StmtAST : public BaseAST {
             block->GenKoopaIR();
         }else if(exp){
             exp->GenKoopaIR();
-        }else {
-
+        }else if(while_exp){
+            while_exp->GenKoopaIR();
+        }else if(is_break){
+            string taget_label = builder.GetCurrentLoopEnd();
+            builder.EndWithJump(taget_label);
+        }else if(is_continue){
+            string target_label = builder.GetCurrentLoopEntry();
+            builder.EndWithJump(target_label);
         }
         return "";
     }
@@ -657,6 +666,35 @@ class InitValAST : public BaseAST {
         int CalcValue() const override {
             return exp->CalcValue();
         }
+};
+
+class WhileAST: public BaseAST{
+    public:
+        unique_ptr<BaseAST> cond;
+        unique_ptr<BaseAST> stmt;
+
+    string GenKoopaIR() const override {
+        int id = builder.GetUniqueId();
+        string entry_label = "%while_entry_" + to_string(id);
+        string body_label = "%while_body_" + to_string(id);
+        string end_label = "%while_end_" + to_string(id);
+        builder.EndWithJump(entry_label);
+        builder.StartNewBlock(entry_label);
+        string cond_val = cond->GenKoopaIR();
+        builder.EndWithBranch(cond_val, body_label, end_label);
+        builder.StartNewBlock(body_label);
+
+        builder.Pushloop(entry_label, end_label);
+        if(stmt){
+            stmt->GenKoopaIR();
+        }
+
+        builder.Poploop();
+        builder.EndWithJump(entry_label);
+        builder.StartNewBlock(end_label);
+
+        return "";
+    }
 };
 
 

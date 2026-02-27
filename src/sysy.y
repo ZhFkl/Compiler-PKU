@@ -27,7 +27,8 @@ using namespace std;
   BaseAST* ast_val;
 }
 
-%token INT RETURN LE GE EQ NEQ LAND LOR CONST IF ELSE
+%token INT RETURN LE GE EQ NEQ LAND LOR 
+CONST IF ELSE  WHILE Break Continue
 %token <str_val> IDENT 
 %token <int_val> INT_CONST
 
@@ -37,7 +38,7 @@ RelExp EqExp LAndExp LOrExp Exp PrimaryExp
 UnaryExp Number AddExp MulExp Decl ConstDecl
 BType ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
-InitVal
+InitVal Whileblock
 
 
 %type <int_val> UnaryOp AddOp MulOp 
@@ -152,6 +153,21 @@ Stmt
       ast->then_stmt = unique_ptr<BaseAST>($5);
       ast->else_stmt = unique_ptr<BaseAST>($7);
       $$ = ast;
+  }
+  | Whileblock{
+    auto ast = new StmtAST();
+    ast->while_exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | Break{
+    auto ast = new StmtAST();
+    ast->is_break = true;
+    $$ = ast;
+  }
+  | Continue{
+    auto ast = new StmtAST();
+    ast->is_continue = true;
+    $$ = ast;
   };
 
 
@@ -424,6 +440,12 @@ InitVal: Exp{
   $$ = ast;
 };
 
+Whileblock: WHILE '(' Exp ')' Stmt{
+  auto ast = new WhileAST();
+  ast->cond = unique_ptr<BaseAST>($3);
+  ast->stmt = unique_ptr<BaseAST>($5);
+  $$ = ast;
+}
 
 //pa5
 
