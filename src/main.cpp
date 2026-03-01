@@ -65,7 +65,9 @@ int main(int argc, const char *argv[]) {
       cerr << "Compiler Error: Parsing failed, AST is null!" << endl;
       return 1; // 发生语法错误，返回非0状态码
   }
+  cout << "test" << endl;
   string koopa_ir = ast->GenKoopaIR();
+  cout << "test" << endl;
   if(mode == "koopa"){
       cout << "Koopa IR 代码" << endl;
       cout << koopa_ir;

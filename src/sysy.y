@@ -28,7 +28,7 @@ using namespace std;
 }
 
 %token INT RETURN LE GE EQ NEQ LAND LOR 
-CONST IF ELSE  WHILE Break Continue
+CONST IF ELSE  WHILE Break Continue Void
 %token <str_val> IDENT 
 %token <int_val> INT_CONST
 
@@ -38,19 +38,39 @@ RelExp EqExp LAndExp LOrExp Exp PrimaryExp
 UnaryExp Number AddExp MulExp Decl ConstDecl
 BType ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
-InitVal Whileblock
-
+InitVal Whileblock FuncFParams FuncFParam  FuncRParams
+CompUnit Program
 
 %type <int_val> UnaryOp AddOp MulOp 
 %type <str_val> RelOp EqOp
+%start Program
 
 %%
 
+Program : CompUnit{
+  ast = unique_ptr<BaseAST>($1);
+};
+
 CompUnit
-  : FuncDef {
-    auto comp_unit = make_unique<CompUnitAST>();
-    comp_unit->func_def = unique_ptr<BaseAST>($1);
-    ast = std::move(comp_unit);
+  : Decl{
+    auto ast = new CompUnitAST();
+    ast->global_defs.push_back(unique_ptr<BaseAST>($1));
+    $$ = ast;
+  }
+  |FuncDef {
+      auto ast = new CompUnitAST();
+      ast->global_defs.push_back(unique_ptr<BaseAST>($1));
+      $$ = ast;    
+  }
+  | CompUnit Decl{
+    auto ast = static_cast<CompUnitAST*>($1);
+    ast->global_defs.push_back(unique_ptr<BaseAST>($2));
+    $$ = ast;
+  }
+  | CompUnit FuncDef{
+    auto ast = static_cast<CompUnitAST*>($1);
+    ast->global_defs.push_back(unique_ptr<BaseAST>($2));
+    $$ = ast;
   }
   ;
 
@@ -62,12 +82,25 @@ FuncDef
     ast->block = unique_ptr<BaseAST>($5);
     $$ = ast;
   }
+  | FuncType IDENT '('  FuncFParams  ')' Block{
+    auto ast = new FuncDefAST();
+    ast->func_type = unique_ptr<BaseAST>($1);
+    ast->ident = *$2;
+    ast->func_params = unique_ptr<BaseAST>($4);
+    ast->block = unique_ptr<BaseAST>($6);
+    $$ = ast;
+  }
   ;
 
 // 同上, 不再解释
 FuncType
   : INT {
     auto ast = new FuncTypeAST();
+    ast->type = "int";
+    $$ = ast;
+  }| Void{
+    auto ast = new FuncTypeAST();
+    ast->type = "void";
     $$ = ast;
   }
   ;
@@ -193,7 +226,7 @@ PrimaryExp
     auto ast = new PrimaryExpAST();
     ast->LVal = unique_ptr<BaseAST>($1);
     $$ = ast;
-  }
+  };
 
 
 UnaryExp
@@ -206,6 +239,16 @@ UnaryExp
     auto ast = new UnaryExpAST();
     ast->op = $1;
     ast->unary_exp = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  |IDENT '(' ')' {
+    auto ast = new UnaryExpAST();
+    ast->ident = *$1;
+    $$ = ast;
+  }| IDENT '(' FuncRParams ')'{
+    auto ast = new UnaryExpAST();
+    ast->ident = *$1;
+    ast->func_call = unique_ptr<BaseAST>($3);
     $$ = ast;
   }
   ;
@@ -447,11 +490,44 @@ Whileblock: WHILE '(' Exp ')' Stmt{
   $$ = ast;
 }
 
-//pa5
+
+FuncFParams: FuncFParam{
+  auto ast = new FuncFParamsAST();
+  ast->params.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+}
+| FuncFParams ',' FuncFParam{
+  auto ast = static_cast<FuncFParamsAST*>($1);
+  ast->params.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+};
+
+FuncFParam: BType IDENT{
+    auto ast = new FuncFParamAST();
+    ast->b_type = unique_ptr<BaseAST>($1);
+    ast->ident = *$2;
+    $$ = ast;
+};
+
+FuncRParams: Exp{
+  auto ast = new FuncRParamsAST();
+  ast->exps.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+}
+| FuncRParams ',' Exp{
+  auto ast = static_cast<FuncRParamsAST*>($1);
+  ast->exps.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+};
+
+
 
 
 %%
 
 void yyerror(unique_ptr<BaseAST> &ast, const char *s) {
-  cerr << "error: " << s << endl;
+  extern int yylineno;  // 引入 flex 维护的行号
+  extern char *yytext;  // 引入 flex 当前解析的字符串
+  cerr << "error: " << s << " at line " << yylineno 
+       << " near token '" << yytext << "'" << endl;
 }

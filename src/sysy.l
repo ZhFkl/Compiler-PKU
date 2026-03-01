@@ -45,6 +45,7 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 "while"         { return WHILE;}
 "break"         {return Break;}
 "continue"      {return Continue;}
+"void"          { return Void;}
 
 
 

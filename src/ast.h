@@ -12,7 +12,7 @@ using namespace std;
 
 inline SymbolTable sym_table;
 inline KoopaIRBuilder builder;
-
+inline bool is_in_global = true;
 
 class BaseAST {
 //这个是基类，要提供之后的接口也可以是一个纯虚函数
@@ -29,12 +29,95 @@ class BaseAST {
 //定义此时的compUnit、
 class CompUnitAST : public BaseAST {
     public:
-    std::unique_ptr<BaseAST> func_def;
+    vector<unique_ptr<BaseAST>> global_defs;
 
+        void InitSysYLibrary() const {
+        // 1. 提前注册到符号表，供后续 AST 节点检查和生成调用指令
+        sym_table.Insert("getint", {SymbolType::RET_INT, 0, ""});
+        sym_table.Insert("getch", {SymbolType::RET_INT, 0, ""});
+        sym_table.Insert("getarray", {SymbolType::RET_INT, 0, ""});
+        
+        sym_table.Insert("putint", {SymbolType::RET_VOID, 0, ""});
+        sym_table.Insert("putch", {SymbolType::RET_VOID, 0, ""});
+        sym_table.Insert("putarray", {SymbolType::RET_VOID, 0, ""});
+        
+        sym_table.Insert("starttime", {SymbolType::RET_VOID, 0, ""});
+        sym_table.Insert("stoptime", {SymbolType::RET_VOID, 0, ""});
+
+        // 2. 将库函数的 Koopa IR 声明 (decl) 提前存入 Builder 的全局定义中
+        // 注意：这里需要确保你的 builder.AddGlobalDecl 支持直接追加字符串并带有换行
+        builder.AddGlobalDecl("decl @getint(): i32");
+        builder.AddGlobalDecl("decl @getch(): i32");
+        builder.AddGlobalDecl("decl @getarray(*i32): i32");
+        builder.AddGlobalDecl("decl @putint(i32)");
+        builder.AddGlobalDecl("decl @putch(i32)");
+        builder.AddGlobalDecl("decl @putarray(i32, *i32)");
+        builder.AddGlobalDecl("decl @starttime()");
+        builder.AddGlobalDecl("decl @stoptime()");
+        builder.AddGlobalDecl(""); // 加个空行美化生成的 IR
+    }
     string GenKoopaIR() const override{
-        return func_def->GenKoopaIR();
+
+        InitSysYLibrary(); // 初始化库函数声明
+        for(const auto& def: global_defs){
+            def->GenKoopaIR();
+        }
+
+        string final_ir = builder.GetProgramIR();
+        cout << final_ir << endl;
+        return final_ir;
     }
     
+};
+
+
+class FuncFParamAST : public BaseAST {
+    public:
+        unique_ptr<BaseAST> b_type;
+        string ident;
+
+        string GetSignature() const{
+            return "@" + ident + ": i32";
+        }
+
+        string GenKoopaIR() const override{
+            string param_name = "@" + ident;
+            string local_var_name = "@" + ident + "_local_" + to_string(builder.GetUniqueId());
+
+
+            SymbolEntry entry = {SymbolType::VARIABLE, 0, local_var_name};
+            if (!sym_table.Insert(ident, entry)) {
+                cerr << "Semantic Error: Redefinition of parameter '" << ident << "'" << endl;
+                exit(1);
+            }
+
+            builder.AddAlloc(local_var_name + " = alloc i32");
+            builder.AddInst("store " + param_name + ", " + local_var_name);
+            
+            return "";
+        }
+    
+};
+
+class FuncFParamsAST : public BaseAST {
+    public:
+        vector<unique_ptr<BaseAST>> params;
+        string GenKoopaIR() const override {
+            for(const auto& param: params){
+                param->GenKoopaIR();
+            }
+            return "";
+        }
+
+        string GetSignature() const{
+           string sig = "";
+            for (size_t i = 0; i < params.size(); ++i) {
+                auto param_ptr = static_cast<FuncFParamAST*>(params[i].get());
+                sig += param_ptr->GetSignature();
+                if (i != params.size() - 1) sig += ", ";
+            }
+            return sig;
+        }
 };
 
 class FuncDefAST :public BaseAST {
@@ -42,16 +125,54 @@ class FuncDefAST :public BaseAST {
     std:: unique_ptr<BaseAST> func_type;
     std:: string ident;
     std:: unique_ptr<BaseAST> block;
-
+    unique_ptr<BaseAST> func_params;
 
     string GenKoopaIR() const override {
+        is_in_global = false;
         builder.Reset();
+
+        string type_str = func_type->GenKoopaIR(); 
+        string koopa_ret_type = (type_str == "int") ? ": i32" : ""; 
+        sym_table.Insert(ident, {type_str == "int" ? SymbolType::RET_INT : SymbolType::RET_VOID, 0, ""});
+        string sig_params = "";
+        if (func_params) {
+            auto params_ptr = static_cast<FuncFParamsAST*>(func_params.get());
+            sig_params = params_ptr->GetSignature(); 
+        }
+
+        string signature = "fun @" + ident + "(" + sig_params + ")" + koopa_ret_type;
+        sym_table.EnterScope();
+
+
+        if(func_params){
+            func_params->GenKoopaIR();
+        }
+
+
         block->GenKoopaIR();
-        string result = builder.BuildFunction(ident);
-        cout << result << endl;
-        return result;
+
+        // 6. 退出作用域
+        sym_table.ExitScope();
+
+        // 7. 处理无 return 的兜底
+        if (!builder.IsBlockClosed()) {
+            if (type_str == "void") {
+                builder.EndWithRet("");
+            } else {
+                builder.EndWithRet("0"); 
+            }
+        }
+
+        // 8. 组装并追加到全局 Buffer 中
+        string func_ir = builder.BuildFunction(signature);
+        builder.AddGlobalDecl(func_ir); // 把这个函数存进整个程序的代码里
+
+        is_in_global = true; 
+        return "";
     }
 };
+
+
 
 class FuncTypeAST : public BaseAST {
     public:
@@ -268,6 +389,9 @@ class UnaryExpAST : public BaseAST {
         unique_ptr<BaseAST> primary_exp;
         char op = 0;
         unique_ptr<BaseAST> unary_exp;
+        unique_ptr<BaseAST> func_call;
+        string ident;
+
 
         string GenKoopaIR() const override {
             if(primary_exp){
@@ -284,6 +408,27 @@ class UnaryExpAST : public BaseAST {
                     builder.AddInst(res_var + " = eq " + inner_val + ", 0");
                 }
                 return res_var;
+            }else if(!ident.empty()){
+                string args = "";
+                if(func_call){
+                    args = func_call->GenKoopaIR();
+                }
+                auto entry = sym_table.Lookup(ident);
+                if (!entry) {
+                    cerr << "Semantic Error: Undefined variable '" << ident << "'" << endl;
+                    exit(1);
+                }
+                if (entry->type == SymbolType::RET_INT) {
+                    auto res_var = builder.GetTmpVar();
+                    builder.AddInst(res_var + " = call @" + ident + "(" + args + ")");
+                    return res_var;
+                }else if(entry->type == SymbolType:: RET_VOID){
+                    builder.AddInst("call @" + ident + "(" + args + ")");
+                    return "";
+                } else {
+                    cerr << "Semantic Error: Symbol '" << ident << "' is not a function" << endl;
+                    exit(1);
+                }
             }
             return "";
         }
@@ -641,16 +786,31 @@ class VarDefAST : public BaseAST {
         string GenKoopaIR() const override {
 
             //为变量生成一个koopa IR中的临时变量名
-            string var_name = "@" + ident + "_" + to_string(builder.GetUniqueId());
+            string var_name;
+            if(is_in_global) {
+                var_name = "@" + ident;
+            } else {
+                var_name = "@" + ident + "_" + to_string(builder.GetUniqueId());
+            }
             SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name};
             if (!sym_table.Insert(ident, entry)) {
                 cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
                 exit(1);
             }
-            builder.AddAlloc(var_name + " = alloc i32");
-            if(init_val){
-                string init_val_name = init_val->GenKoopaIR();
-                builder.AddInst("store " + init_val_name + ", " + var_name);
+
+            if(is_in_global){
+                if(init_val){
+                    int val = init_val->CalcValue();
+                    builder.AddGlobalDecl( "global " + var_name + " = alloc i32," + to_string(val));
+                }else{
+                    builder.AddGlobalDecl( "global " + var_name + " = alloc i32,  zeroinit");   
+                }
+            }else {
+                builder.AddAlloc(var_name + " = alloc i32");
+                if (init_val) {
+                    string val_name = init_val->GenKoopaIR();
+                    builder.AddInst("store " + val_name + ", " + var_name);
+                }
             }
             return "";
         }
@@ -695,6 +855,24 @@ class WhileAST: public BaseAST{
 
         return "";
     }
+};
+
+
+class FuncRParamsAST : public BaseAST {
+    public:
+        vector<unique_ptr<BaseAST>> exps;
+        string GenKoopaIR() const override {
+             string args_str = "";
+            for (size_t i = 0; i < exps.size(); ++i) {
+                // 计算每个实参的 IR，并获取对应的临时变量名/常量值
+                string arg_val = exps[i]->GenKoopaIR();
+                args_str += arg_val;
+                if (i != exps.size() - 1) {
+                    args_str += ", ";
+                }
+            }
+            return args_str;
+        }
 };
 
 

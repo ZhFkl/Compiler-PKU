@@ -6,7 +6,9 @@
 using namespace std;
 enum class SymbolType{
     VARIABLE,
-    CONSTANT
+    CONSTANT,
+    RET_VOID,
+    RET_INT
 };
 
 struct SymbolEntry
@@ -64,6 +66,7 @@ private:
     int tmp_cnt = 0;
     string alloc_buffer = "";
     string inst_buffer = "";
+    string global_buffer = "";
     bool is_block_closed = false;
     struct loopInfo{
         string entry_label;
@@ -116,6 +119,10 @@ public:
         return "%" + to_string(GetUniqueId());
     }
 
+    void AddGlobalDecl(const string& decl){
+        global_buffer += decl + "\n\n";
+    }
+
     void AddAlloc(const string& inst){
         alloc_buffer += "  " + inst + "\n";
     }
@@ -162,18 +169,26 @@ public:
         is_block_closed = false;
     }
 
-    string BuildFunction(const string& func_name){
+    string BuildFunction(const string& signature){
         if(!is_block_closed){
             cerr << "Error: Cannot build function with an open block!" << endl;
             return "";
         }
-        string final_ir = "fun @" + func_name + "(): i32 {\n";
+
+        string final_ir = signature + " {\n";
         final_ir += "%entry:\n";
-        final_ir += alloc_buffer; // alloc 统一置顶
+        final_ir += alloc_buffer;
         final_ir += inst_buffer;
+        final_ir += "\n\n";
         final_ir += "}\n";
         return final_ir;
+
     }
+
+    string GetProgramIR() const{
+        return global_buffer;
+    }
+
 
     bool IsBlockClosed() const {
         return is_block_closed;
