@@ -28,15 +28,15 @@ using namespace std;
 }
 
 %token INT RETURN LE GE EQ NEQ LAND LOR 
-CONST IF ELSE  WHILE Break Continue Void
+CONST IF ELSE  WHILE Break Continue VOID
 %token <str_val> IDENT 
 %token <int_val> INT_CONST
 
 
-%type <ast_val> FuncDef FuncType Block Stmt 
+%type <ast_val> FuncDef Block Stmt 
 RelExp EqExp LAndExp LOrExp Exp PrimaryExp 
 UnaryExp Number AddExp MulExp Decl ConstDecl
-BType ConstDef ConstInitVal BlockItem BlockItemList
+ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
 InitVal Whileblock FuncFParams FuncFParam  FuncRParams
 CompUnit Program
@@ -74,17 +74,122 @@ CompUnit
   }
   ;
 
+
+Decl
+  : ConstDecl{
+    auto ast = new DeclAST();
+    ast->const_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | VarDecl{
+    auto ast = new DeclAST();
+    ast->var_decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+ConstDecl
+  : CONST INT ConstDefList ';'{
+    auto ast = static_cast<ConstDeclAST*>($3);
+    auto btype_ast = new BTypeAST(); 
+    ast->b_type = unique_ptr<BaseAST>(btype_ast);
+    $$ = ast;
+  }
+  ;
+
+ConstDefList
+  : ConstDef {
+    auto ast = new ConstDeclAST();
+    ast->const_defs.push_back(unique_ptr<BaseAST>($1));
+    $$ = ast;
+  }
+  | ConstDefList ',' ConstDef {
+    auto ast = static_cast<ConstDeclAST*>($1);
+    ast->const_defs.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
+  }
+  ;
+
+ConstDef : IDENT '=' ConstInitVal{
+  auto ast = new ConstDefAST();
+  ast->ident = *$1;
+  ast->const_init_val = unique_ptr<BaseAST>($3);
+  $$ = ast;
+}
+
+
+ConstInitVal: ConstExp{
+  auto ast = new ConstInitValAST();
+  ast->const_exp = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
+VarDecl
+  : INT VarDefList ';'{
+    auto ast = static_cast<VarDeclAST*>($2);
+    auto btype_ast = new BTypeAST();
+    ast->b_type = unique_ptr<BaseAST>(btype_ast);
+    $$ = ast;
+  };
+
+VarDefList : VarDef {
+    auto ast = new VarDeclAST();
+    ast->var_defs.push_back(unique_ptr<BaseAST>($1));
+    $$ = ast;
+  }
+  | VarDefList ',' VarDef {
+    auto ast = static_cast<VarDeclAST*>($1);
+    ast->var_defs.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
+  };
+
+VarDef: IDENT{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+  $$ = ast;
+} | IDENT '=' InitVal{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+  ast->init_val = unique_ptr<BaseAST>($3);
+  $$ = ast;
+};
+
+InitVal: Exp{
+  auto ast = new InitValAST();
+  ast->exp = unique_ptr<BaseAST>($1);
+  $$ = ast;
+};
+
 FuncDef
-  : FuncType IDENT '(' ')' Block {
+  : INT IDENT '(' ')' Block {
     auto ast = new FuncDefAST();
-    ast->func_type = unique_ptr<BaseAST>($1);
+    auto type_ast = new FuncTypeAST(); type_ast->type = "int";
+    ast->func_type = unique_ptr<BaseAST>(type_ast);
     ast->ident = *unique_ptr<string>($2);
     ast->block = unique_ptr<BaseAST>($5);
     $$ = ast;
   }
-  | FuncType IDENT '('  FuncFParams  ')' Block{
+  | VOID IDENT '(' ')' Block {
     auto ast = new FuncDefAST();
-    ast->func_type = unique_ptr<BaseAST>($1);
+    auto type_ast = new FuncTypeAST(); type_ast->type = "void";
+    ast->func_type = unique_ptr<BaseAST>(type_ast);
+    ast->ident = *unique_ptr<string>($2);
+    ast->block = unique_ptr<BaseAST>($5);
+    $$ = ast;
+  }
+  | INT IDENT '(' FuncFParams ')' Block {
+    auto ast = new FuncDefAST();
+    auto type_ast = new FuncTypeAST(); type_ast->type = "int";
+    ast->func_type = unique_ptr<BaseAST>(type_ast);
+    ast->ident = *$2;
+    ast->func_params = unique_ptr<BaseAST>($4);
+    ast->block = unique_ptr<BaseAST>($6);
+    $$ = ast;
+  }
+  | VOID IDENT '(' FuncFParams ')' Block {
+    auto ast = new FuncDefAST();
+    auto type_ast = new FuncTypeAST(); type_ast->type = "void";
+    ast->func_type = unique_ptr<BaseAST>(type_ast);
     ast->ident = *$2;
     ast->func_params = unique_ptr<BaseAST>($4);
     ast->block = unique_ptr<BaseAST>($6);
@@ -92,18 +197,28 @@ FuncDef
   }
   ;
 
-// 同上, 不再解释
-FuncType
-  : INT {
-    auto ast = new FuncTypeAST();
-    ast->type = "int";
+  
+FuncFParams: FuncFParam{
+  auto ast = new FuncFParamsAST();
+  ast->params.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+}
+| FuncFParams ',' FuncFParam{
+  auto ast = static_cast<FuncFParamsAST*>($1);
+  ast->params.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+};
+
+FuncFParam
+  : INT IDENT {
+    auto ast = new FuncFParamAST();
+    auto btype_ast = new BTypeAST();
+    ast->b_type = unique_ptr<BaseAST>(btype_ast);
+    ast->ident = *$2;
     $$ = ast;
-  }| Void{
-    auto ast = new FuncTypeAST();
-    ast->type = "void";
-    $$ = ast;
-  }
-  ;
+  };
+
+
 
 Block: '{' BlockItemList '}' {
   $$ = $2;
@@ -212,6 +327,14 @@ Exp
   }
   ;
 
+
+LVal : IDENT {
+  auto ast = new LValAST();
+  ast->ident = *$1;
+  $$ = ast;
+};
+
+
 PrimaryExp
   : '(' Exp ')' {
     auto ast = new PrimaryExpAST();
@@ -227,6 +350,14 @@ PrimaryExp
     ast->LVal = unique_ptr<BaseAST>($1);
     $$ = ast;
   };
+
+Number
+  : INT_CONST {
+    auto ast = new NumberAST();
+    ast->value = $1;
+    $$ = ast;
+  }
+  ;
 
 
 UnaryExp
@@ -259,6 +390,17 @@ UnaryOp
  | '!' { $$ = '!';}
  ;
 
+ FuncRParams: Exp{
+  auto ast = new FuncRParamsAST();
+  ast->exps.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+}
+| FuncRParams ',' Exp{
+  auto ast = static_cast<FuncRParamsAST*>($1);
+  ast->exps.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+};
+
 AddOp
   : '+' { $$ = '+';}
   | '-' { $$ = '-';}
@@ -270,22 +412,21 @@ MulOp
   | '%' { $$ = '%';}
   ;
 
-
-
-
-Number
-  : INT_CONST {
-    auto ast = new NumberAST();
-    ast->value = $1;
+  
+MulExp 
+  : UnaryExp {
+    auto ast = new MulExpAST();
+    ast->unary_exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | MulExp MulOp UnaryExp{
+    auto ast = new MulExpAST();
+    ast->mul_exp = unique_ptr<BaseAST>($1);
+    ast->op = $2;
+    ast->unary_exp = unique_ptr<BaseAST>($3);
     $$ = ast;
   }
   ;
-
-LVal : IDENT {
-  auto ast = new LValAST();
-  ast->ident = *$1;
-  $$ = ast;
-}
 
 AddExp
   : MulExp {
@@ -298,21 +439,6 @@ AddExp
     ast->add_exp = unique_ptr<BaseAST>($1);
     ast->op = $2;
     ast->mul_exp = unique_ptr<BaseAST>($3);
-    $$ = ast;
-  }
-  ;
-
-MulExp 
-  : UnaryExp {
-    auto ast = new MulExpAST();
-    ast->unary_exp = unique_ptr<BaseAST>($1);
-    $$ = ast;
-  }
-  | MulExp MulOp UnaryExp{
-    auto ast = new MulExpAST();
-    ast->mul_exp = unique_ptr<BaseAST>($1);
-    ast->op = $2;
-    ast->unary_exp = unique_ptr<BaseAST>($3);
     $$ = ast;
   }
   ;
@@ -388,60 +514,6 @@ LOrExp
   }
   ;
 
-Decl
-  : ConstDecl{
-    auto ast = new DeclAST();
-    ast->const_decl = unique_ptr<BaseAST>($1);
-    $$ = ast;
-  }
-  | VarDecl{
-    auto ast = new DeclAST();
-    ast->var_decl = unique_ptr<BaseAST>($1);
-    $$ = ast;
-  }
-  ;
-
-ConstDecl
-  : CONST BType ConstDefList ';'{
-    auto ast = static_cast<ConstDeclAST*>($3);
-    ast->b_type = unique_ptr<BaseAST>($2);
-    $$ = ast;
-  }
-  ;
-
-ConstDefList
-  : ConstDef {
-    auto ast = new ConstDeclAST();
-    ast->const_defs.push_back(unique_ptr<BaseAST>($1));
-    $$ = ast;
-  }
-  | ConstDefList ',' ConstDef {
-    auto ast = static_cast<ConstDeclAST*>($1);
-    ast->const_defs.push_back(unique_ptr<BaseAST>($3));
-    $$ = ast;
-  }
-  ;
-
-BType
-  : INT{
-    auto ast = new BTypeAST();
-    $$ = ast;
-  }
-  ;
-
-ConstDef : IDENT '=' ConstInitVal{
-  auto ast = new ConstDefAST();
-  ast->ident = *$1;
-  ast->const_init_val = unique_ptr<BaseAST>($3);
-  $$ = ast;
-}
-
-
-ConstInitVal: ConstExp{
-  auto ast = new ConstInitValAST();
-  ast->const_exp = unique_ptr<BaseAST>($1);
-  $$ = ast;
-};
 
 ConstExp : Exp{
   auto ast = new ConstExpAST();
@@ -449,39 +521,7 @@ ConstExp : Exp{
   $$ = ast;
 };
 
-VarDecl: BType VarDefList ';'{
-    auto ast = static_cast<VarDeclAST*>($2);
-    ast->b_type = unique_ptr<BaseAST>($1);
-    $$ = ast;
-};
 
-VarDefList : VarDef {
-    auto ast = new VarDeclAST();
-    ast->var_defs.push_back(unique_ptr<BaseAST>($1));
-    $$ = ast;
-  }
-  | VarDefList ',' VarDef {
-    auto ast = static_cast<VarDeclAST*>($1);
-    ast->var_defs.push_back(unique_ptr<BaseAST>($3));
-    $$ = ast;
-  };
-
-VarDef: IDENT{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  $$ = ast;
-} | IDENT '=' InitVal{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  ast->init_val = unique_ptr<BaseAST>($3);
-  $$ = ast;
-};
-
-InitVal: Exp{
-  auto ast = new InitValAST();
-  ast->exp = unique_ptr<BaseAST>($1);
-  $$ = ast;
-};
 
 Whileblock: WHILE '(' Exp ')' Stmt{
   auto ast = new WhileAST();
@@ -489,39 +529,6 @@ Whileblock: WHILE '(' Exp ')' Stmt{
   ast->stmt = unique_ptr<BaseAST>($5);
   $$ = ast;
 }
-
-
-FuncFParams: FuncFParam{
-  auto ast = new FuncFParamsAST();
-  ast->params.push_back(unique_ptr<BaseAST>($1));
-  $$ = ast;
-}
-| FuncFParams ',' FuncFParam{
-  auto ast = static_cast<FuncFParamsAST*>($1);
-  ast->params.push_back(unique_ptr<BaseAST>($3));
-  $$ = ast;
-};
-
-FuncFParam: BType IDENT{
-    auto ast = new FuncFParamAST();
-    ast->b_type = unique_ptr<BaseAST>($1);
-    ast->ident = *$2;
-    $$ = ast;
-};
-
-FuncRParams: Exp{
-  auto ast = new FuncRParamsAST();
-  ast->exps.push_back(unique_ptr<BaseAST>($1));
-  $$ = ast;
-}
-| FuncRParams ',' Exp{
-  auto ast = static_cast<FuncRParamsAST*>($1);
-  ast->exps.push_back(unique_ptr<BaseAST>($3));
-  $$ = ast;
-};
-
-
-
 
 %%
 
