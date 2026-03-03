@@ -89,7 +89,9 @@ int main(int argc, const char *argv[]) {
       freopen(output_file.c_str(), "w", stdout);
 
         // 2. 遍历 raw 结构，开始输出汇编
-      Visit(raw);
+      AsmGenerator gen;
+
+      gen.Generate(raw);
 
         // 恢复 stdout 并清理
       fclose(stdout);
