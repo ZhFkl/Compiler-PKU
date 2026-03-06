@@ -39,7 +39,7 @@ UnaryExp Number AddExp MulExp Decl ConstDecl
 ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
 InitVal Whileblock FuncFParams FuncFParam  FuncRParams
-CompUnit Program
+CompUnit Program ConstExplist Explist
 
 %type <int_val> UnaryOp AddOp MulOp 
 %type <str_val> RelOp EqOp
@@ -115,14 +115,38 @@ ConstDef : IDENT '=' ConstInitVal{
   ast->ident = *$1;
   ast->const_init_val = unique_ptr<BaseAST>($3);
   $$ = ast;
-}
+}| IDENT '[' ConstExp ']' '=' ConstInitVal{
+  auto ast = new ConstDefAST();
+  ast->ident = *$1;
+  ast->array_len = unique_ptr<BaseAST>($3);
+  ast->const_init_val = unique_ptr<BaseAST>($6);
+  $$ = ast;
+};
 
 
 ConstInitVal: ConstExp{
   auto ast = new ConstInitValAST();
   ast->const_exp = unique_ptr<BaseAST>($1);
   $$ = ast;
+}| '{' '}'{
+  auto ast = new ConstInitValAST();
+  ast->is_array = true;
+  $$ = ast;
+}| '{'   ConstExplist  '}'{
+  auto ast = static_cast<ConstInitValAST*>($2);
+  ast->is_array = true;
+  $$ = ast;
 };
+
+ConstExplist: ConstInitVal{
+  auto ast = new ConstInitValAST();
+  ast->init_list.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+}| ConstExplist ',' ConstInitVal{
+  auto ast = static_cast<ConstInitValAST*>($1);
+  ast->init_list.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+}
 
 VarDecl
   : INT VarDefList ';'{
@@ -152,12 +176,46 @@ VarDef: IDENT{
   ast->ident = *$1;
   ast->init_val = unique_ptr<BaseAST>($3);
   $$ = ast;
+}| IDENT '['  ConstExp ']'{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+  ast->array_len = unique_ptr<BaseAST>($3);
+  $$ = ast;
+
+}| IDENT '[' ConstExp ']' '=' InitVal{
+  auto ast = new VarDefAST();
+  ast->ident = *$1;
+  ast->array_len = unique_ptr<BaseAST>($3);
+  ast->init_val = unique_ptr<BaseAST>($6);
+  $$ = ast;
 };
+
+
 
 InitVal: Exp{
   auto ast = new InitValAST();
+  ast->is_array = false;
   ast->exp = unique_ptr<BaseAST>($1);
   $$ = ast;
+}| '{' '}'{
+  auto ast = new InitValAST();
+  ast->is_array = true;
+  $$ = ast;
+}| '{'   Explist '}'{
+  auto ast = static_cast<InitValAST*>($2);
+  ast->is_array = true;
+  $$ = ast;
+};
+
+Explist : Explist ',' Exp{
+  auto ast = static_cast<InitValAST*>($1);
+  ast->init_list.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
+}| Exp{
+  auto ast = new InitValAST();
+  ast->init_list.push_back(unique_ptr<BaseAST>($1));
+  $$ = ast;
+
 };
 
 FuncDef
@@ -331,6 +389,11 @@ Exp
 LVal : IDENT {
   auto ast = new LValAST();
   ast->ident = *$1;
+  $$ = ast;
+}| IDENT '[' Exp ']'{
+  auto ast = new LValAST();
+  ast->ident = *$1;
+  ast->array_idx = unique_ptr<BaseAST>($3);
   $$ = ast;
 };
 

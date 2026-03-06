@@ -219,22 +219,35 @@ class BlockItemAST : public BaseAST {
 class LValAST : public BaseAST {
     public:
         string ident;
-
-        string GenKoopaIR() const override {
+        unique_ptr<BaseAST> array_idx;
+        string GetPtrIR() const{
             auto entry = sym_table.Lookup(ident);
-            if (!entry) {
+            if(!entry){
                 cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
                 exit(1);
             }
 
-            if (entry->type == SymbolType::CONSTANT) {
-                // 常量直接返回数值字符串
+            if(!array_idx){
+                return entry->var_name;
+            }else{
+                string idx_val = array_idx->GenKoopaIR();
+                string elem_ptr = builder.GetTmpVar();
+                builder.AddInst(elem_ptr + " = getelemptr "+ entry->var_name + ", " + idx_val);
+                return elem_ptr;
+            }
+        }
+
+
+
+        string GenKoopaIR() const override {
+            auto entry = sym_table.Lookup(ident);
+            if(entry->type == SymbolType::CONSTANT && !array_idx){
                 return to_string(entry->int_val);
-            } else {
-                // 变量必须生成 load 指令从内存取值
+            }else{
+                string ptr = GetPtrIR();
                 string tmp_var = builder.GetTmpVar();
-                builder.AddInst(tmp_var + " = load " + entry->var_name);
-                return tmp_var; 
+                builder.AddInst(tmp_var + " = load " + ptr);
+                return tmp_var;
             }
         }
 
@@ -298,20 +311,9 @@ class StmtAST : public BaseAST {
 
         } else if(lval && exp){
             LValAST* lval_ptr = static_cast<LValAST*>(lval.get());
-            string target_ident = lval_ptr->ident;
-            
-            auto entry = sym_table.Lookup(target_ident);
-            if (!entry) {
-                cerr << "Semantic Error: Undefined variable '" << target_ident << "'" << endl;
-                exit(1);
-            }
-            if (entry->type == SymbolType::CONSTANT) {
-                cerr << "Semantic Error: Cannot assign to constant '" << target_ident << "'" << endl;
-                exit(1);
-            }
+            string ptr_name = lval_ptr->GetPtrIR(); // 调用上面新增的取指针方法
             string val_name = exp->GenKoopaIR();
-            builder.AddInst("store " + val_name + ", " + entry->var_name);
-
+            builder.AddInst("store " + val_name + ", " + ptr_name);
         }else if(block){
             block->GenKoopaIR();
         }else if(exp){
@@ -720,36 +722,91 @@ class BTypeAST : public BaseAST {
             return type;
         }
 };
+class ConstInitValAST : public BaseAST {
+    public:
+        bool is_array = false;
+        unique_ptr<BaseAST> const_exp;
+        vector<unique_ptr<BaseAST>> init_list;
+        string GenKoopaIR() const override {
+            if(!is_array) return const_exp->GenKoopaIR();
+            return "";
+        }
+
+        int CalcValue() const override {
+            if(!is_array) return const_exp->CalcValue();
+            return 0;
+        }
+
+        string GetGlobalInitStr(int expected_len) const {
+            if (!is_array) return to_string(const_exp->CalcValue());
+            string res = "{";
+            for (int i = 0; i < expected_len; ++i) {
+                if (i < init_list.size()) {
+                    res += to_string(init_list[i]->CalcValue());
+                } else {
+                    res += "0";
+                }
+                if (i != expected_len - 1) res += ", ";
+            }
+            res += "}";
+            return res;
+        }
+
+        void GenLocalInitIR(const string& base_ptr, int expected_len) const {
+            for (int i = 0; i < expected_len; ++i) {
+                string elem_ptr = builder.GetTmpVar();
+                builder.AddInst(elem_ptr + " = getelemptr " + base_ptr + ", " + to_string(i));
+                
+                string val_name;
+                if (i < init_list.size()) {
+                    val_name = init_list[i]->GenKoopaIR();
+                } else {
+                    val_name = "0";
+                }
+                builder.AddInst("store " + val_name + ", " + elem_ptr);
+            }
+        }
+};
+
 
 class ConstDefAST : public BaseAST {    
     public:
         string ident;
         unique_ptr<BaseAST> const_init_val;
+        unique_ptr<BaseAST> array_len;
 
         string GenKoopaIR() const override {
-            int real_value = const_init_val->CalcValue();
-            // 存入当前层次的符号表
-            SymbolEntry entry = {SymbolType::CONSTANT, real_value, ""};
-            if (!sym_table.Insert(ident, entry)) {
-                cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
-                exit(1);
+            string var_name = is_in_global ? "@" + ident : "@" + ident + "_" + to_string(builder.GetUniqueId());
+
+            if(!array_len){
+                int real_value = const_init_val->CalcValue();
+                SymbolEntry entry = {SymbolType::CONSTANT, real_value, var_name};
+                if (!sym_table.Insert(ident, entry)) {
+                    cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
+                    exit(1);
+                }
+            }else{
+                SymbolEntry entry = {SymbolType::CONSTANT, 0, var_name}; // 数组常量的 int_val 字段暂不使用
+                if (!sym_table.Insert(ident, entry)) {
+                    cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
+                    exit(1);
+                }
+
+                int len = array_len->CalcValue();
+                string type_str = "[i32," + to_string(len) + "]";
+                if(is_in_global){
+                    string init_str = static_cast<ConstInitValAST*>(const_init_val.get())->GetGlobalInitStr(len);
+                    builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ", " + init_str);
+                }else{
+                    builder.AddAlloc(var_name + " = alloc " + type_str);
+                    static_cast<ConstInitValAST*>(const_init_val.get())->GenLocalInitIR(var_name, len);
+                }
             }
-            return "";  
+            return "";
         }
 };
 
-class ConstInitValAST : public BaseAST {
-    public:
-        unique_ptr<BaseAST> const_exp;
 
-        string GenKoopaIR() const override {
-            return const_exp->GenKoopaIR();
-        }
-
-        int CalcValue() const override {
-            return const_exp->CalcValue();
-        }
-};
 
 class ConstExpAST : public BaseAST {
     public:
@@ -778,55 +835,103 @@ class VarDeclAST : public BaseAST {
         }
 };
 
+class InitValAST : public BaseAST {
+    public:
+        bool is_array = false;
+        unique_ptr<BaseAST> exp;
+        vector<unique_ptr<BaseAST>> init_list;
+        string GenKoopaIR() const override {
+            if(!is_array) return exp->GenKoopaIR();
+            return "";
+        }
+
+        int CalcValue() const override {
+            if(!is_array) return exp->CalcValue();
+            return 0;
+        }
+
+        string GetGlobalInitStr(int len) const {
+            if(!is_array) return to_string(exp->CalcValue());
+            string ret = "{";
+            for(int i = 0; i < len; ++i){
+                if (i < init_list.size()) {
+                    ret += to_string(init_list[i]->CalcValue());
+                } else {
+                    ret += "0"; // 补齐 0
+                }
+                if (i != len - 1) ret += ", ";
+            }
+            ret += "}";
+            return ret;
+        }
+
+        void GenLocalInitIR(const string& base_ptr, int len) const {
+            for(int i = 0; i < len; i++){
+                string elem_ptr = builder.GetTmpVar();
+                builder.AddInst(elem_ptr + " = getelemptr " + base_ptr + ", " + to_string(i));
+
+                string val_name;
+                if (i < init_list.size()) {
+                    val_name = init_list[i]->GenKoopaIR();
+                } else {
+                    val_name = "0"; // 局部数组未显式初始化的部分也要清零
+                }
+                builder.AddInst("store " + val_name + ", " + elem_ptr);
+            }
+        }
+};
+
+
+
 class VarDefAST : public BaseAST {
     public:
         string ident;
         unique_ptr<BaseAST> init_val; // 可以为 nullptr，表示未初始化
+        unique_ptr<BaseAST> array_len;
 
         string GenKoopaIR() const override {
 
             //为变量生成一个koopa IR中的临时变量名
-            string var_name;
-            if(is_in_global) {
-                var_name = "@" + ident;
-            } else {
-                var_name = "@" + ident + "_" + to_string(builder.GetUniqueId());
-            }
+            string var_name = is_in_global ? "@" + ident : "@" + ident + "_" + to_string(builder.GetUniqueId());
             SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name};
             if (!sym_table.Insert(ident, entry)) {
                 cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
                 exit(1);
             }
 
-            if(is_in_global){
-                if(init_val){
-                    int val = init_val->CalcValue();
-                    builder.AddGlobalDecl( "global " + var_name + " = alloc i32," + to_string(val));
-                }else{
-                    builder.AddGlobalDecl( "global " + var_name + " = alloc i32,  zeroinit");   
+            if(!array_len){
+                if(is_in_global){
+                    int val = init_val ? init_val->CalcValue() : 0;
+                    builder.AddGlobalDecl("global " + var_name + " = alloc i32, " + to_string(val));
+                }else {
+                    builder.AddAlloc(var_name + " = alloc i32");
+                    if (init_val) {
+                        string val_name = init_val->GenKoopaIR();
+                        builder.AddInst("store " + val_name + ", " + var_name);
+                    }
                 }
-            }else {
-                builder.AddAlloc(var_name + " = alloc i32");
-                if (init_val) {
-                    string val_name = init_val->GenKoopaIR();
-                    builder.AddInst("store " + val_name + ", " + var_name);
+            }else{
+                //对于数组的生成ir环节
+                int len = array_len->CalcValue();
+                string type_str = "[i32," + to_string(len) + "]";
+                if(is_in_global){
+                    if(init_val){
+                        string init_str = static_cast<InitValAST*>(init_val.get())->GetGlobalInitStr(len);
+                        builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ", " + init_str);
+                    }else{
+                        builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ",zeorinit");
+                    }
+                }else{
+                    builder.AddAlloc(var_name +  " = alloc " + type_str);
+                    if(init_val){
+                        static_cast<InitValAST*>(init_val.get())->GenLocalInitIR(var_name,len);
+                    }
                 }
             }
             return "";
         }
 };
 
-class InitValAST : public BaseAST {
-    public:
-        unique_ptr<BaseAST> exp;
-        string GenKoopaIR() const override {
-            return exp->GenKoopaIR();
-        }
-
-        int CalcValue() const override {
-            return exp->CalcValue();
-        }
-};
 
 class WhileAST: public BaseAST{
     public:
