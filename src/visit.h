@@ -21,8 +21,11 @@ private:
 
     bool HasCallINFunc(const koopa_raw_function_t &func);
     int AllocStackSpace(int size);
-    void load_value(koopa_raw_value_t val,const std::string&reg,int sp_offset);
+    int GetTypeSize(koopa_raw_type_t ty);
+    void store_value(const std::string& reg, int offset);
+    void load_value(koopa_raw_value_t val, const std::string& reg, int sp_offset);
     string GetBasicBlockLabel(koopa_raw_basic_block_t bb);
+    void VisitAggregate(koopa_raw_value_t init);
 
 
     void Visit(const koopa_raw_program_t &program);
@@ -38,5 +41,6 @@ private:
     void Visit(const koopa_raw_value_t &val, const koopa_raw_jump_t& jump);
     void Visit(const koopa_raw_value_t &val, const koopa_raw_call_t& call);
     void Visit(const koopa_raw_value_t &val, const koopa_raw_global_alloc_t& global_alloc);
-    void SaveParamToStack(const koopa_raw_function_t &func);
+    void Visit(const koopa_raw_value_t &val, const koopa_raw_get_ptr_t &get_ptr); 
+    void Visit(const koopa_raw_value_t &val, const koopa_raw_get_elem_ptr_t &get_elem_ptr); 
 };
