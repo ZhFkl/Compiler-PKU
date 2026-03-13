@@ -16,6 +16,9 @@ struct SymbolEntry
     SymbolType type;
     int int_val;
     string var_name;
+
+    int dims = 0;              // 记录数组总维度（标量为 0）
+    bool is_array_ptr = false; // 记录是否为函数形参传进来的数组指针
     /* data */
 };
 

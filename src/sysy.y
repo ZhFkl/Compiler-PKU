@@ -285,11 +285,19 @@ FuncFParams: FuncFParam{
 FuncFParam
   : INT IDENT {
     auto ast = new FuncFParamAST();
-    auto btype_ast = new BTypeAST();
-    ast->b_type = unique_ptr<BaseAST>(btype_ast);
     ast->ident = *$2;
     $$ = ast;
-  };
+  }| INT IDENT '[' ']' ConstDimlist {
+    auto ast = new FuncFParamAST();
+    ast->ident = *$2;
+    ast->is_array = true;
+    auto dim_list = static_cast<DimListAST*>($5);
+    ast->array_dims = std::move(dim_list->dims);
+    delete dim_list;
+
+    $$ = ast;
+
+  }
 
 
 

@@ -102,25 +102,38 @@ class CompUnitAST : public BaseAST {
 
 class FuncFParamAST : public BaseAST {
     public:
-        unique_ptr<BaseAST> b_type;
         string ident;
+        bool is_array = false;
+        vector<unique_ptr<BaseAST>> array_dims;
 
-        string GetSignature() const{
-            return "@" + ident + ": i32";
+        string GetKoopaType() const {
+            if (!is_array) return "i32";
+            vector<int> shape;
+            for (auto& dim : array_dims) {
+                shape.push_back(dim->CalcValue());
+            }
+            if (shape.empty()) return "*i32"; // 一维数组指针
+            return "*" + GenerateKoopaArrayType(shape); // 多维数组指针
         }
 
-        string GenKoopaIR() const override{
-            string param_name = "@" + ident;
-            string local_var_name = "@" + ident + "_local_" + to_string(builder.GetUniqueId());
 
+        string GetSignature() const {
+            return "%" + ident + ": " + GetKoopaType();
+        }
 
-            SymbolEntry entry = {SymbolType::VARIABLE, 0, local_var_name};
-            if (!sym_table.Insert(ident, entry)) {
-                cerr << "Semantic Error: Redefinition of parameter '" << ident << "'" << endl;
-                exit(1);
-            }
+        // 2. 修改对应 IR 里的 param_name
+        string GenKoopaIR() const override {
+            string param_name = "%" + ident;  // <--- 关键修复：从 @ 改成 %
+            
+            // 局部变量加了 unique_id 本来就不会冲突，可以用 % 也可以保持 @
+            string local_var_name = "%" + ident + "_local_" + to_string(builder.GetUniqueId());
 
-            builder.AddAlloc(local_var_name + " = alloc i32");
+            int dims = is_array ? 1 + array_dims.size() : 0;
+            
+            SymbolEntry entry = {SymbolType::VARIABLE, 0, local_var_name, dims, is_array};
+            if (!sym_table.Insert(ident, entry)) { exit(1); }
+
+            builder.AddAlloc(local_var_name + " = alloc " + GetKoopaType());
             builder.AddInst("store " + param_name + ", " + local_var_name);
             
             return "";
@@ -251,17 +264,26 @@ class LValAST : public BaseAST {
         vector<unique_ptr<BaseAST>> array_indices;
         string GetPtrIR() const{
             auto entry = sym_table.Lookup(ident);
-            if(!entry){
-                cerr << "Semantic Error: Undefined symbol '" << ident << "'" << endl;
-                exit(1);
-            }
+            if (!entry) { exit(1); }
 
             string curr_ptr = entry->var_name;
-            for(const auto& idx_ast: array_indices){
+            bool is_first = true;
+
+            for (const auto& idx_ast : array_indices) {
                 string idx_val = idx_ast->GenKoopaIR();
                 string next_ptr = builder.GetTmpVar();
-                builder.AddInst(next_ptr + " = getelemptr " + curr_ptr + ", " + idx_val);
+                
+                if (entry->is_array_ptr && is_first) {
+                    // 【核心特判】：如果是形参传进来的数组指针，第一维必须先 load 再 getptr！
+                    string actual_ptr = builder.GetTmpVar();
+                    builder.AddInst(actual_ptr + " = load " + curr_ptr);
+                    builder.AddInst(next_ptr + " = getptr " + actual_ptr + ", " + idx_val);
+                } else {
+                    // 其他情况，或指针的后续维度，正常使用 getelemptr
+                    builder.AddInst(next_ptr + " = getelemptr " + curr_ptr + ", " + idx_val);
+                }
                 curr_ptr = next_ptr;
+                is_first = false;
             }
             return curr_ptr;
         }
@@ -270,13 +292,31 @@ class LValAST : public BaseAST {
 
         string GenKoopaIR() const override {
             auto entry = sym_table.Lookup(ident);
-            if(entry->type == SymbolType::CONSTANT && array_indices.empty()){
+            
+            if (entry->type == SymbolType::CONSTANT && array_indices.empty()) {
                 return to_string(entry->int_val);
-            }else{
+            } else {
                 string ptr = GetPtrIR();
-                string tmp_var = builder.GetTmpVar();
-                builder.AddInst(tmp_var + " = load " + ptr);
-                return tmp_var;
+                
+                // 数组退化逻辑：如果只取了部分维度（例如将 a[2][3] 当作一维传给函数）
+                if (array_indices.size() < entry->dims) {
+                    if (entry->is_array_ptr && array_indices.empty()) {
+                        // 情况 A：本身是个参数指针，且没写下标，直接提取原指针
+                        string tmp = builder.GetTmpVar();
+                        builder.AddInst(tmp + " = load " + ptr);
+                        return tmp;
+                    } else {
+                        // 情况 B：普通数组退化为指针，强行取第 0 个元素的地址
+                        string tmp = builder.GetTmpVar();
+                        builder.AddInst(tmp + " = getelemptr " + ptr + ", 0");
+                        return tmp;
+                    }
+                } else {
+                    // 完全访问：提取出具体的 i32 整数
+                    string tmp = builder.GetTmpVar();
+                    builder.AddInst(tmp + " = load " + ptr);
+                    return tmp;
+                }
             }
         }
 
@@ -312,7 +352,7 @@ class StmtAST : public BaseAST {
 
     string GenKoopaIR() const override {
         if(is_return){
-            string ret_val = exp ? exp->GenKoopaIR() : "0"; 
+            string ret_val = exp ? exp->GenKoopaIR() : ""; 
             builder.EndWithRet(ret_val);
             return "";
         }else if(is_if){
@@ -826,11 +866,11 @@ class ConstDefAST : public BaseAST {
             if (array_dims.empty()) { 
                 // 标量常量：直接存入符号表，不生成 alloc 内存指令
                 int real_value = const_init_val->CalcValue();
-                SymbolEntry entry = {SymbolType::CONSTANT, real_value, var_name};
+                SymbolEntry entry = {SymbolType::CONSTANT, real_value, var_name, 0, false};
                 if (!sym_table.Insert(ident, entry)) { exit(1); }
             } else { 
                 // 数组常量：由于可以通过 a[i] 运行时访问，必须分配真实内存！
-                SymbolEntry entry = {SymbolType::CONSTANT, 0, var_name};
+                SymbolEntry entry = {SymbolType::CONSTANT, 0, var_name, (int)array_dims.size(), false};
                 if (!sym_table.Insert(ident, entry)) { exit(1); }
 
                 vector<int> shape;
@@ -974,7 +1014,7 @@ class VarDefAST : public BaseAST {
 
         string GenKoopaIR() const override {
             string var_name = is_in_global ? "@" + ident : "@" + ident + "_" + to_string(builder.GetUniqueId());
-            SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name};
+            SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name, (int)array_dims.size(), false};
             if (!sym_table.Insert(ident, entry)) { exit(1); }
 
             if (array_dims.empty()) { // 标量
