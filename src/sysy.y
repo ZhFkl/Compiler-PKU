@@ -39,7 +39,9 @@ UnaryExp Number AddExp MulExp Decl ConstDecl
 ConstDef ConstInitVal BlockItem BlockItemList
 LVal ConstExp ConstDefList VarDecl VarDef VarDefList
 InitVal Whileblock FuncFParams FuncFParam  FuncRParams
-CompUnit Program ConstExplist Explist
+CompUnit Program ConstInitVallist InitVallist
+ConstDimlist ArrayIndices
+
 
 %type <int_val> UnaryOp AddOp MulOp 
 %type <str_val> RelOp EqOp
@@ -110,18 +112,18 @@ ConstDefList
   }
   ;
 
-ConstDef : IDENT '=' ConstInitVal{
-  auto ast = new ConstDefAST();
-  ast->ident = *$1;
-  ast->const_init_val = unique_ptr<BaseAST>($3);
-  $$ = ast;
-}| IDENT '[' ConstExp ']' '=' ConstInitVal{
-  auto ast = new ConstDefAST();
-  ast->ident = *$1;
-  ast->array_len = unique_ptr<BaseAST>($3);
-  ast->const_init_val = unique_ptr<BaseAST>($6);
-  $$ = ast;
-};
+ConstDef 
+  :  IDENT ConstDimlist '=' ConstInitVal {
+    auto ast = new ConstDefAST();
+    ast->ident = *$1;
+    
+    auto dim_list = static_cast<DimListAST*>($2);
+    ast->array_dims = std::move(dim_list->dims);
+    delete dim_list; 
+    
+    ast->const_init_val = unique_ptr<BaseAST>($4);
+    $$ = ast;
+  };
 
 
 ConstInitVal: ConstExp{
@@ -132,21 +134,23 @@ ConstInitVal: ConstExp{
   auto ast = new ConstInitValAST();
   ast->is_array = true;
   $$ = ast;
-}| '{'   ConstExplist  '}'{
+}| '{'   ConstInitVallist  '}'{
   auto ast = static_cast<ConstInitValAST*>($2);
   ast->is_array = true;
   $$ = ast;
 };
 
-ConstExplist: ConstInitVal{
+ConstInitVallist: ConstInitVal{
   auto ast = new ConstInitValAST();
   ast->init_list.push_back(unique_ptr<BaseAST>($1));
   $$ = ast;
-}| ConstExplist ',' ConstInitVal{
+}| ConstInitVallist ',' ConstInitVal{
   auto ast = static_cast<ConstInitValAST*>($1);
   ast->init_list.push_back(unique_ptr<BaseAST>($3));
   $$ = ast;
-}
+};
+
+
 
 VarDecl
   : INT VarDefList ';'{
@@ -167,27 +171,36 @@ VarDefList : VarDef {
     $$ = ast;
   };
 
-VarDef: IDENT{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  $$ = ast;
-} | IDENT '=' InitVal{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  ast->init_val = unique_ptr<BaseAST>($3);
-  $$ = ast;
-}| IDENT '['  ConstExp ']'{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  ast->array_len = unique_ptr<BaseAST>($3);
-  $$ = ast;
+VarDef
+  : IDENT ConstDimlist {
+    auto ast = new VarDefAST();
+    ast->ident = *$1;
+    
+    auto dim_list = static_cast<DimListAST*>($2);
+    ast->array_dims = std::move(dim_list->dims);
+    delete dim_list;
+    
+    $$ = ast;
+  }
+  | IDENT ConstDimlist '=' InitVal {
+    auto ast = new VarDefAST();
+    ast->ident = *$1;
+    
+    auto dim_list = static_cast<DimListAST*>($2);
+    ast->array_dims = std::move(dim_list->dims);
+    delete dim_list;
+    
+    ast->init_val = unique_ptr<BaseAST>($4);
+    $$ = ast;
+  };
 
-}| IDENT '[' ConstExp ']' '=' InitVal{
-  auto ast = new VarDefAST();
-  ast->ident = *$1;
-  ast->array_len = unique_ptr<BaseAST>($3);
-  ast->init_val = unique_ptr<BaseAST>($6);
-  $$ = ast;
+
+ConstDimlist:{
+    $$ = new DimListAST();
+}| ConstDimlist '[' ConstExp ']'{
+    auto ast = static_cast<DimListAST*>($1);
+    ast->dims.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
 };
 
 
@@ -201,22 +214,24 @@ InitVal: Exp{
   auto ast = new InitValAST();
   ast->is_array = true;
   $$ = ast;
-}| '{'   Explist '}'{
+}| '{'  InitVallist '}'{
   auto ast = static_cast<InitValAST*>($2);
   ast->is_array = true;
   $$ = ast;
 };
 
-Explist : Explist ',' Exp{
-  auto ast = static_cast<InitValAST*>($1);
-  ast->init_list.push_back(unique_ptr<BaseAST>($3));
-  $$ = ast;
-}| Exp{
+InitVallist: InitVal{
   auto ast = new InitValAST();
   ast->init_list.push_back(unique_ptr<BaseAST>($1));
   $$ = ast;
-
+}| InitVallist ',' InitVal{
+  auto ast = static_cast<InitValAST*>($1);
+  ast->init_list.push_back(unique_ptr<BaseAST>($3));
+  $$ = ast;
 };
+
+
+
 
 FuncDef
   : INT IDENT '(' ')' Block {
@@ -385,17 +400,26 @@ Exp
   }
   ;
 
+ArrayIndices
+  : /* 空 */ {
+    $$ = new DimListAST();
+  }
+  | ArrayIndices '[' Exp ']' {
+    auto ast = static_cast<DimListAST*>($1);
+    ast->dims.push_back(unique_ptr<BaseAST>($3));
+    $$ = ast;
+  };
 
-LVal : IDENT {
-  auto ast = new LValAST();
-  ast->ident = *$1;
-  $$ = ast;
-}| IDENT '[' Exp ']'{
-  auto ast = new LValAST();
-  ast->ident = *$1;
-  ast->array_idx = unique_ptr<BaseAST>($3);
-  $$ = ast;
-};
+
+LVal
+  : IDENT ArrayIndices {
+    auto ast = new LValAST();
+    ast->ident = *$1;
+    auto dim_list = static_cast<DimListAST*>($2);
+    ast->array_indices = std::move(dim_list->dims);
+    delete dim_list;
+    $$ = ast;
+  };
 
 
 PrimaryExp

@@ -13,6 +13,35 @@ using namespace std;
 inline SymbolTable sym_table;
 inline KoopaIRBuilder builder;
 inline bool is_in_global = true;
+inline string GenerateKoopaArrayType(const vector<int>& shape, int depth = 0) {
+    if (depth == shape.size()) return "i32";
+    return "[" + GenerateKoopaArrayType(shape, depth + 1) + ", " + to_string(shape[depth]) + "]";
+}
+
+inline vector<int> CalculateStrides(const vector<int>& shape){
+    if(shape.empty()) return {};
+    vector<int> strides(shape.size());
+    int total = 1;
+    for(int i = shape.size() - 1; i >= 0; --i){
+        strides[i] = total;
+        total *= shape[i];
+    }
+    return strides;
+}
+
+inline string FormatKoopaGlobalInit(const vector<int>& buffer, const vector<int>& shape, int depth, int& offset){
+    if(depth == shape.size()) {
+        return to_string(buffer[offset++]);
+    }
+
+    string res = "{";
+    for(int i = 0; i < shape[depth]; ++i){
+        res += FormatKoopaGlobalInit(buffer, shape, depth + 1, offset);
+        if(i != shape[depth] - 1) res += ", ";
+    }
+    res += "}";
+    return res;
+}
 
 class BaseAST {
 //这个是基类，要提供之后的接口也可以是一个纯虚函数
@@ -28,7 +57,7 @@ class BaseAST {
 
 //定义此时的compUnit、
 class CompUnitAST : public BaseAST {
-    public:
+    public:    
     vector<unique_ptr<BaseAST>> global_defs;
 
         void InitSysYLibrary() const {
@@ -219,7 +248,7 @@ class BlockItemAST : public BaseAST {
 class LValAST : public BaseAST {
     public:
         string ident;
-        unique_ptr<BaseAST> array_idx;
+        vector<unique_ptr<BaseAST>> array_indices;
         string GetPtrIR() const{
             auto entry = sym_table.Lookup(ident);
             if(!entry){
@@ -227,21 +256,21 @@ class LValAST : public BaseAST {
                 exit(1);
             }
 
-            if(!array_idx){
-                return entry->var_name;
-            }else{
-                string idx_val = array_idx->GenKoopaIR();
-                string elem_ptr = builder.GetTmpVar();
-                builder.AddInst(elem_ptr + " = getelemptr "+ entry->var_name + ", " + idx_val);
-                return elem_ptr;
+            string curr_ptr = entry->var_name;
+            for(const auto& idx_ast: array_indices){
+                string idx_val = idx_ast->GenKoopaIR();
+                string next_ptr = builder.GetTmpVar();
+                builder.AddInst(next_ptr + " = getelemptr " + curr_ptr + ", " + idx_val);
+                curr_ptr = next_ptr;
             }
+            return curr_ptr;
         }
 
 
 
         string GenKoopaIR() const override {
             auto entry = sym_table.Lookup(ident);
-            if(entry->type == SymbolType::CONSTANT && !array_idx){
+            if(entry->type == SymbolType::CONSTANT && array_indices.empty()){
                 return to_string(entry->int_val);
             }else{
                 string ptr = GetPtrIR();
@@ -737,33 +766,49 @@ class ConstInitValAST : public BaseAST {
             return 0;
         }
 
-        string GetGlobalInitStr(int expected_len) const {
-            if (!is_array) return to_string(const_exp->CalcValue());
-            string res = "{";
-            for (int i = 0; i < expected_len; ++i) {
-                if (i < init_list.size()) {
-                    res += to_string(init_list[i]->CalcValue());
-                } else {
-                    res += "0";
-                }
-                if (i != expected_len - 1) res += ", ";
+
+        void Flatten(vector<int>& buffer, int& offset, const vector<int>& strides, int depth) const {
+            if (!is_array) {
+                if (offset < buffer.size()) buffer[offset++] = const_exp->CalcValue();
+                return;
             }
-            res += "}";
-            return res;
+
+            int start_offset = offset;
+            for (const auto& child : init_list) {
+                auto child_ast = static_cast<ConstInitValAST*>(child.get()); // 强转为 Const
+                if (!child_ast->is_array) {
+                    if (offset < buffer.size()) buffer[offset++] = child_ast->const_exp->CalcValue();
+                } else {
+                    int sub_depth = depth + 1;
+                    while (sub_depth < strides.size() - 1 && offset % strides[sub_depth] != 0) {
+                        sub_depth++;
+                    }
+                    int align = strides[sub_depth];
+                    if (offset % align != 0) {
+                        offset += align - (offset % align); // 补零对齐
+                    }
+                    child_ast->Flatten(buffer, offset, strides, sub_depth);
+                }
+            }
+            
+            // 退出大括号时跳过剩余空间（自动当作 0）
+            if (depth > 0 || (depth == 0 && strides.size() > 0)) {
+                offset = start_offset + strides[depth];
+            }
         }
 
-        void GenLocalInitIR(const string& base_ptr, int expected_len) const {
-            for (int i = 0; i < expected_len; ++i) {
+        // 局部常量数组初始化
+        void GenLocalInitIR(const string& base_ptr, const vector<int>& shape, int depth, const vector<int>& buffer, int& offset) const {
+            for (int i = 0; i < shape[depth]; ++i) {
                 string elem_ptr = builder.GetTmpVar();
                 builder.AddInst(elem_ptr + " = getelemptr " + base_ptr + ", " + to_string(i));
                 
-                string val_name;
-                if (i < init_list.size()) {
-                    val_name = init_list[i]->GenKoopaIR();
+                if (depth == shape.size() - 1) { 
+                    int val = buffer[offset++];
+                    builder.AddInst("store " + to_string(val) + ", " + elem_ptr);
                 } else {
-                    val_name = "0";
+                    GenLocalInitIR(elem_ptr, shape, depth + 1, buffer, offset);
                 }
-                builder.AddInst("store " + val_name + ", " + elem_ptr);
             }
         }
 };
@@ -773,33 +818,54 @@ class ConstDefAST : public BaseAST {
     public:
         string ident;
         unique_ptr<BaseAST> const_init_val;
-        unique_ptr<BaseAST> array_len;
+        vector<unique_ptr<BaseAST>> array_dims;
 
         string GenKoopaIR() const override {
             string var_name = is_in_global ? "@" + ident : "@" + ident + "_" + to_string(builder.GetUniqueId());
 
-            if(!array_len){
+            if (array_dims.empty()) { 
+                // 标量常量：直接存入符号表，不生成 alloc 内存指令
                 int real_value = const_init_val->CalcValue();
                 SymbolEntry entry = {SymbolType::CONSTANT, real_value, var_name};
-                if (!sym_table.Insert(ident, entry)) {
-                    cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
-                    exit(1);
-                }
-            }else{
-                SymbolEntry entry = {SymbolType::CONSTANT, 0, var_name}; // 数组常量的 int_val 字段暂不使用
-                if (!sym_table.Insert(ident, entry)) {
-                    cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
-                    exit(1);
-                }
+                if (!sym_table.Insert(ident, entry)) { exit(1); }
+            } else { 
+                // 数组常量：由于可以通过 a[i] 运行时访问，必须分配真实内存！
+                SymbolEntry entry = {SymbolType::CONSTANT, 0, var_name};
+                if (!sym_table.Insert(ident, entry)) { exit(1); }
 
-                int len = array_len->CalcValue();
-                string type_str = "[i32," + to_string(len) + "]";
-                if(is_in_global){
-                    string init_str = static_cast<ConstInitValAST*>(const_init_val.get())->GetGlobalInitStr(len);
+                vector<int> shape;
+                for (auto& dim : array_dims) {
+                    shape.push_back(dim->CalcValue());
+                }
+                string type_str = GenerateKoopaArrayType(shape);
+
+                if (is_in_global) {
+                    // 全局数组常量生成
+                    vector<int> strides = CalculateStrides(shape);
+                    int total_size = shape[0] * strides[0];
+                    vector<int> buffer(total_size, 0);
+                    int offset = 0;
+                    
+                    // 使用 ConstInitValAST 的 Flatten
+                    static_cast<ConstInitValAST*>(const_init_val.get())->Flatten(buffer, offset, strides, 0);
+
+                    int tmp_offset = 0;
+                    string init_str = FormatKoopaGlobalInit(buffer, shape, 0, tmp_offset);
                     builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ", " + init_str);
-                }else{
+                    
+                } else {
+                    // 局部数组常量生成
                     builder.AddAlloc(var_name + " = alloc " + type_str);
-                    static_cast<ConstInitValAST*>(const_init_val.get())->GenLocalInitIR(var_name, len);
+                    
+                    vector<int> strides = CalculateStrides(shape);
+                    int total_size = shape[0] * strides[0];
+                    vector<int> buffer(total_size, 0);
+                    int offset = 0;
+                    
+                    static_cast<ConstInitValAST*>(const_init_val.get())->Flatten(buffer, offset, strides, 0);
+
+                    int tmp_offset = 0;
+                    static_cast<ConstInitValAST*>(const_init_val.get())->GenLocalInitIR(var_name, shape, 0, buffer, tmp_offset);
                 }
             }
             return "";
@@ -850,33 +916,49 @@ class InitValAST : public BaseAST {
             return 0;
         }
 
-        string GetGlobalInitStr(int len) const {
-            if(!is_array) return to_string(exp->CalcValue());
-            string ret = "{";
-            for(int i = 0; i < len; ++i){
-                if (i < init_list.size()) {
-                    ret += to_string(init_list[i]->CalcValue());
-                } else {
-                    ret += "0"; // 补齐 0
-                }
-                if (i != len - 1) ret += ", ";
+        void Flatten(vector<int>& buffer, int& offset, const vector<int>& strides, int depth) const {
+            if (!is_array) {
+                if (offset < buffer.size()) buffer[offset++] = exp->CalcValue();
+                return;
             }
-            ret += "}";
-            return ret;
+
+            int start_offset = offset;
+            for (const auto& child : init_list) {
+                auto child_ast = static_cast<InitValAST*>(child.get());
+                if (!child_ast->is_array) {
+                    if (offset < buffer.size()) buffer[offset++] = child_ast->exp->CalcValue();
+                } else {
+                    // 如果遇到大括号，根据 SysY 规则寻找对其边界
+                    int sub_depth = depth + 1;
+                    while (sub_depth < strides.size() - 1 && offset % strides[sub_depth] != 0) {
+                        sub_depth++;
+                    }
+                    int align = strides[sub_depth];
+                    if (offset % align != 0) {
+                        offset += align - (offset % align); // 补零对齐
+                    }
+                    child_ast->Flatten(buffer, offset, strides, sub_depth);
+                }
+            }
+            
+            // 退出大括号时，跳过本层剩余未填写的空间（默认就是补0）
+            if (depth > 0 || (depth == 0 && strides.size() > 0)) {
+                offset = start_offset + strides[depth];
+            }
         }
 
-        void GenLocalInitIR(const string& base_ptr, int len) const {
-            for(int i = 0; i < len; i++){
+         void GenLocalInitIR(const string& base_ptr, const vector<int>& shape, int depth, const vector<int>& buffer, int& offset) const {
+            for (int i = 0; i < shape[depth]; ++i) {
                 string elem_ptr = builder.GetTmpVar();
                 builder.AddInst(elem_ptr + " = getelemptr " + base_ptr + ", " + to_string(i));
-
-                string val_name;
-                if (i < init_list.size()) {
-                    val_name = init_list[i]->GenKoopaIR();
+                
+                if (depth == shape.size() - 1) { // 标量到底了
+                    int val = buffer[offset++];
+                    // 局部全量初始化：如果是0，也要显式 store 进内存，因为局部内存不干净
+                    builder.AddInst("store " + to_string(val) + ", " + elem_ptr);
                 } else {
-                    val_name = "0"; // 局部数组未显式初始化的部分也要清零
+                    GenLocalInitIR(elem_ptr, shape, depth + 1, buffer, offset);
                 }
-                builder.AddInst("store " + val_name + ", " + elem_ptr);
             }
         }
 };
@@ -887,44 +969,61 @@ class VarDefAST : public BaseAST {
     public:
         string ident;
         unique_ptr<BaseAST> init_val; // 可以为 nullptr，表示未初始化
-        unique_ptr<BaseAST> array_len;
+        vector<unique_ptr<BaseAST>> array_dims;
+
 
         string GenKoopaIR() const override {
-
-            //为变量生成一个koopa IR中的临时变量名
             string var_name = is_in_global ? "@" + ident : "@" + ident + "_" + to_string(builder.GetUniqueId());
             SymbolEntry entry = {SymbolType::VARIABLE, 0, var_name};
-            if (!sym_table.Insert(ident, entry)) {
-                cerr << "Semantic Error: Redefinition of symbol '" << ident << "'" << endl;
-                exit(1);
-            }
+            if (!sym_table.Insert(ident, entry)) { exit(1); }
 
-            if(!array_len){
-                if(is_in_global){
+            if (array_dims.empty()) { // 标量
+                if (is_in_global) {
                     int val = init_val ? init_val->CalcValue() : 0;
                     builder.AddGlobalDecl("global " + var_name + " = alloc i32, " + to_string(val));
-                }else {
+                } else {
                     builder.AddAlloc(var_name + " = alloc i32");
                     if (init_val) {
                         string val_name = init_val->GenKoopaIR();
                         builder.AddInst("store " + val_name + ", " + var_name);
                     }
                 }
-            }else{
-                //对于数组的生成ir环节
-                int len = array_len->CalcValue();
-                string type_str = "[i32," + to_string(len) + "]";
-                if(is_in_global){
-                    if(init_val){
-                        string init_str = static_cast<InitValAST*>(init_val.get())->GetGlobalInitStr(len);
+            } else { // 多维数组
+                vector<int> shape;
+                for (auto& dim : array_dims) {
+                    shape.push_back(dim->CalcValue());
+                }
+                string type_str = GenerateKoopaArrayType(shape);
+
+                if (is_in_global) {
+                    if (init_val) {
+                        // 第 1 步：拍平装入一维 buffer
+                        vector<int> strides = CalculateStrides(shape);
+                        int total_size = shape[0] * strides[0];
+                        vector<int> buffer(total_size, 0);
+                        int offset = 0;
+                        static_cast<InitValAST*>(init_val.get())->Flatten(buffer, offset, strides, 0);
+
+                        // 第 2 步：按 buffer 和 shape 格式化出完美括号字符串
+                        int tmp_offset = 0;
+                        string init_str = FormatKoopaGlobalInit(buffer, shape, 0, tmp_offset);
+                        
+                        // 注意：加个空格，修复你之前的 `@a0` 没空格的排版问题
                         builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ", " + init_str);
-                    }else{
-                        builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ",zeorinit");
+                    } else {
+                        builder.AddGlobalDecl("global " + var_name + " = alloc " + type_str + ", zeroinit");
                     }
-                }else{
-                    builder.AddAlloc(var_name +  " = alloc " + type_str);
-                    if(init_val){
-                        static_cast<InitValAST*>(init_val.get())->GenLocalInitIR(var_name,len);
+                } else {
+                    builder.AddAlloc(var_name + " = alloc " + type_str);
+                    if (init_val) {
+                        vector<int> strides = CalculateStrides(shape);
+                        int total_size = shape[0] * strides[0];
+                        vector<int> buffer(total_size, 0);
+                        int offset = 0;
+                        static_cast<InitValAST*>(init_val.get())->Flatten(buffer, offset, strides, 0);
+
+                        int tmp_offset = 0;
+                        static_cast<InitValAST*>(init_val.get())->GenLocalInitIR(var_name, shape, 0, buffer, tmp_offset);
                     }
                 }
             }
@@ -979,6 +1078,16 @@ class FuncRParamsAST : public BaseAST {
             return args_str;
         }
 };
+
+class DimListAST : public BaseAST{
+    public:
+        vector<unique_ptr<BaseAST>> dims;
+
+        string GenKoopaIR() const override {
+            return "";
+        }
+};
+
 
 
 //定义functype
